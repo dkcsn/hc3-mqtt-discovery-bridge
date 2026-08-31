@@ -8,6 +8,14 @@ function ChildFactory.new(options)
     orphans={}},ChildFactory)
 end
 
+local function deleteChild(id)
+  local ok,result,status=pcall(api.delete,"/plugins/removeChildDevice/"..tonumber(id))
+  if not ok then return false,tostring(result) end
+  status=tonumber(status) or (type(result)=="table" and tonumber(result.status))
+  if status and status~=404 and (status<200 or status>=300) then return false,"http_"..status end
+  return true
+end
+
 local function childConstructors()
   local types={"com.fibaro.device","com.fibaro.binarySensor","com.fibaro.binarySwitch",
     "com.fibaro.multilevelSensor","com.fibaro.multilevelSwitch","com.fibaro.temperatureSensor",
@@ -18,6 +26,7 @@ local function childConstructors()
 end
 
 function ChildFactory:restore()
+  self.orphans={}
   self.parent:initChildDevices(childConstructors())
   for id,child in pairs(self.parent.childDevices or {}) do
     local externalId=child:getVariable("mqttDiscoveryId")
@@ -47,7 +56,9 @@ function ChildFactory:ensure(entity)
   if not child then
     local properties={quickAppVariables=metadataVariables(entity),dead=false}
     if entity.childType~="com.fibaro.device" then
-      properties.value=(entity.component=="binary_sensor" or entity.component=="switch") and false or 0
+      local binaryComponent=entity.component=="binary_sensor" or entity.component=="switch" or
+        entity.component=="device_tracker" or entity.component=="siren"
+      properties.value=binaryComponent and false or 0
     end
     local ok,result=pcall(function()
       return self.parent:createChildDevice({name=entity.name,type=entity.childType,
@@ -57,8 +68,14 @@ function ChildFactory:ensure(entity)
     child=result; entity.childId=child.id; self.registry.byChild[tonumber(child.id)]=entity.externalId
     self.logger("INFO","CHILD","created "..entity.name.." ("..child.id..")")
     if replacedChildId then
-      pcall(api.delete,"/plugins/removeChildDevice/"..replacedChildId)
-      self.parent.childDevices[replacedChildId]=nil; self.registry.byChild[replacedChildId]=nil
+      local removed,removeError=deleteChild(replacedChildId)
+      if removed then
+        self.parent.childDevices[replacedChildId]=nil; self.registry.byChild[replacedChildId]=nil
+      else
+        self.orphans[replacedChildId]=true
+        self.registry.byChild[replacedChildId]=nil
+        self.logger("WARNING","CHILD","replacement created but old child "..replacedChildId.." could not be removed: "..tostring(removeError))
+      end
     end
   else
     child.parent=self.parent
@@ -71,21 +88,33 @@ end
 function ChildFactory:remove(entity)
   if not entity or not entity.childId then return true end
   local id=tonumber(entity.childId)
-  local ok,result=pcall(api.delete,"/plugins/removeChildDevice/"..id)
+  local ok,result=deleteChild(id)
   if ok then
     self.parent.childDevices[id]=nil; self.registry.byChild[id]=nil; entity.childId=nil
     self.logger("INFO","CHILD","removed child "..id)
+  else
+    self.orphans[id]=true
+    self.logger("WARNING","CHILD","could not remove child "..id..": "..tostring(result))
   end
   return ok,result
 end
 
 function ChildFactory:deleteOrphans()
-  local count=0
+  local count,errors=0,{}
   for id in pairs(self.orphans) do
-    local ok=pcall(api.delete,"/plugins/removeChildDevice/"..id)
-    if ok then self.parent.childDevices[id]=nil; self.orphans[id]=nil; count=count+1 end
+    local ok,err=deleteChild(id)
+    if ok then
+      self.parent.childDevices[id]=nil; self.registry.byChild[tonumber(id)]=nil
+      self.orphans[id]=nil; count=count+1
+    end
+    if not ok then errors[#errors+1]=tostring(id)..": "..tostring(err) end
   end
-  return count
+  if #errors>0 then return false,table.concat(errors,"; "),count end
+  return true,count
+end
+
+function ChildFactory:orphanCount()
+  local count=0; for _ in pairs(self.orphans) do count=count+1 end; return count
 end
 
 return ChildFactory

@@ -9,6 +9,7 @@ dofile("SubscriptionRegistry.lua")
 dofile("EntityMapper.lua")
 dofile("EntityRegistry.lua")
 dofile("ApprovalManager.lua")
+dofile("ChildFactory.lua")
 dofile("IconData.lua")
 dofile("IconInstaller.lua")
 
@@ -31,6 +32,7 @@ test("release version is synchronized",function()
   local main=assert(io.open("main.lua","r")); local source=main:read("*a"); main:close()
   truthy(source:find("--%%%%type:com.fibaro.deviceController"),"main.lua must use the visible controller type")
   truthy(source:find("v"..release,1,true),"main.lua description is missing release "..release)
+  truthy(source:find("PolyForm Noncommercial 1.0.0",1,true),"packaged main.lua must carry the noncommercial license notice")
 end)
 
 test("approval mode keeps new entity pending",function()
@@ -59,6 +61,12 @@ test("approval device grouping and filters",function()
   local groups=ApprovalManager.deviceGroups(entities); equal(#groups,2); equal(groups[1].label,"Hall"); equal(groups[2].label,"Kitchen")
   equal(#ApprovalManager.entitiesForScope(entities,"filter:pending"),1)
   equal(#ApprovalManager.entitiesForScope(entities,"device:id:shelly-kitchen"),2)
+end)
+
+test("approval pages large result sets",function()
+  local values={}; for index=1,95 do values[index]=index end
+  local page,current,pages,total=ApprovalManager.page(values,3,40)
+  equal(current,3); equal(pages,3); equal(total,95); equal(#page,15); equal(page[1],81)
 end)
 
 test("embedded HC3 icon is a 128 pixel PNG",function()
@@ -154,6 +162,14 @@ test("device discovery base topic inheritance",function()
   local entities=assert(DiscoveryNormalize.payload("homeassistant/device/dev1/config",payload,"homeassistant"))
   equal(entities[1].stateTopic,"dev1/state"); equal(entities[1].commandTopic,"dev1/set")
 end)
+test("device discovery does not leak component fields",function()
+  local payload='{"dev":{"ids":"dev1"},"o":{"name":"fixture"},"cmd_t":"wrong/root","cmps":{"temperature":{"p":"sensor","stat_t":"temp/state"},"relay":{"p":"switch","cmd_t":"relay/set"}}}'
+  local entities=assert(DiscoveryNormalize.payload("homeassistant/device/dev1/config",payload,"homeassistant"))
+  for _,entity in ipairs(entities) do
+    if entity.component=="sensor" then equal(entity.commandTopic,nil) end
+    if entity.component=="switch" then equal(entity.commandTopic,"relay/set") end
+  end
+end)
 test("empty config removes",function()
   local entities,err,meta=DiscoveryNormalize.payload("homeassistant/sensor/test/config","","homeassistant")
   truthy(entities,err); equal(#entities,0); truthy(meta.remove)
@@ -195,6 +211,22 @@ test("cover reversed position",function()
   local entity={component="cover",config={position_closed=100,position_open=0}}
   local state=EntityMapper.adapters.cover.state(entity,"25"); equal(state.value,75)
 end)
+test("light JSON and separate brightness command topic",function()
+  local entity={externalId="uid:l",component="light",stateTopic="l/state",commandTopic="l/set",
+    config={brightness_scale=255,brightness_state_topic="l/brightness",brightness_command_topic="l/brightness/set"},qos=0,retain=false}
+  assert(EntityMapper.prepare(entity,engine))
+  local state=assert(EntityMapper.adapters.light.state(entity,'{"state":"ON","brightness":128}',"l/state"))
+  truthy(state.state); truthy(state.value>50 and state.value<51)
+  local command=assert(EntityMapper.command(entity,"setValue",50,engine)); equal(command.topic,"l/brightness/set"); equal(command.payload,"128")
+end)
+test("tracker siren and fan adapters",function()
+  local tracker={component="device_tracker",config={},stateTopic="presence",externalId="t"}
+  assert(EntityMapper.prepare(tracker,engine)); truthy(EntityMapper.adapters.device_tracker.state(tracker,"home").value)
+  local siren={component="siren",config={},stateTopic="s",commandTopic="s/set",externalId="s",qos=0,retain=false}
+  assert(EntityMapper.prepare(siren,engine)); equal(assert(EntityMapper.command(siren,"turnOn",nil,engine)).payload,"ON")
+  local fan={component="fan",config={percentage_command_topic="fan/pct/set"},stateTopic="fan/state",commandTopic="fan/set",externalId="f",qos=0,retain=false}
+  assert(EntityMapper.prepare(fan,engine)); equal(assert(EntityMapper.command(fan,"setValue",37,engine)).topic,"fan/pct/set")
+end)
 
 test("discovery update and removal",function()
   local active,removed={},{0}
@@ -206,6 +238,14 @@ test("discovery update and removal",function()
   truthy(discovery:process("homeassistant/sensor/test/config","")); equal(active["uid:u1"],nil); equal(removed[1],1)
 end)
 
+test("device discovery completes one transaction",function()
+  local completed=0
+  local discovery=Discovery.new({prefix="homeassistant",onUpsert=function(entity) return true,entity end,
+    onRemove=function() end,onTransactionComplete=function() completed=completed+1 end})
+  local payload='{"dev":{"ids":"multi"},"o":{"name":"fixture"},"state_topic":"multi/state","cmps":{"a":{"p":"sensor"},"b":{"p":"sensor"},"c":{"p":"sensor"}}}'
+  truthy(discovery:process("homeassistant/device/multi/config",payload)); equal(completed,1)
+end)
+
 test("registry restart restore",function()
   local stored=""
   local parent={getVariable=function() return stored end,setVariable=function(_,_,value) stored=value end}
@@ -214,6 +254,42 @@ test("registry restart restore",function()
   truthy(first:persist())
   local second=EntityRegistry.new({parent=parent}); truthy(second:load())
   equal(second:get("uid:restart").childId,42); equal(second:forChild(42).externalId,"uid:restart")
+end)
+
+test("registry chunked storage roundtrip and compaction",function()
+  local storage,legacy={},""
+  local parent={getVariable=function() return legacy end,setVariable=function(_,_,value) legacy=value end,
+    internalStorageGet=function(_,key) return storage[key] end,
+    internalStorageSet=function(_,key,value) storage[key]=value end,
+    internalStorageRemove=function(_,key) storage[key]=nil end}
+  local first=EntityRegistry.new({parent=parent})
+  first:put({externalId="uid:chunk",component="light",childId=77,discoveryTopic="homeassistant/light/chunk/config",
+    config={brightness_scale=255,brightness_command_topic="light/bri",unused_blob=string.rep("x",60000)},
+    attributes={runtime=true},valueCompiled={runtime=true}})
+  truthy(first:persist()); truthy(storage[Constants.REGISTRY_MANIFEST])
+  local second=EntityRegistry.new({parent=parent}); truthy(second:load())
+  local restored=second:get("uid:chunk"); equal(restored.childId,77); equal(restored.config.brightness_scale,255)
+  equal(restored.config.unused_blob,nil); equal(restored.attributes,nil); equal(second:forChild(77).externalId,"uid:chunk")
+end)
+
+test("registry reload clears stale child index",function()
+  local stored=assert(Utils.encodeJson({schema=2,entities={}}))
+  local parent={getVariable=function() return stored end,setVariable=function() end}
+  local registry=EntityRegistry.new({parent=parent}); registry.byChild[99]="stale"
+  truthy(registry:load()); equal(registry:forChild(99),nil); truthy(registry.dirty)
+end)
+
+test("child deletion validates HTTP status",function()
+  local savedApi=api
+  local parent={childDevices={[42]={}}}
+  local registry={byChild={[42]="uid:x"}}
+  local factory=ChildFactory.new({parent=parent,registry=registry,logger=function() end})
+  local entity={childId=42}
+  api={delete=function() return {},500 end}
+  local ok,err=factory:remove(entity); equal(ok,false); equal(err,"http_500"); equal(entity.childId,42); equal(factory:orphanCount(),1)
+  api={delete=function() return {},404 end}
+  truthy(factory:remove(entity)); equal(entity.childId,nil)
+  api=savedApi
 end)
 
 test("realistic fixtures normalize",function()

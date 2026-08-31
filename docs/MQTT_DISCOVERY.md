@@ -20,17 +20,17 @@ These cover component discovery, optional `node_id`, Device Discovery and option
 7. Build canonical entities and deterministic identities.
 8. Compile templates and choose adapters before committing the update.
 
-Unknown configuration keys remain in `entity.config`. This preserves forward-compatible metadata while adapters ignore fields they do not understand.
+Unknown configuration keys remain available in the live canonical entity. Persistence keeps only adapter-relevant configuration plus canonical fields, which prevents large vendor payloads from exhausting HC3 storage.
 
 ## Device Discovery
 
-Each entry under `components` becomes an independent canonical entity. Shared `device`, `origin`, state topic and availability fields are inherited, while component values override shared values. One shared state topic creates one broker subscription with multiple consumers.
+Each entry under `components` becomes an independent canonical entity. Only Home Assistant's shared Device Discovery options are inherited; component values override them. `device` and `origin` are attached explicitly. One shared state topic creates one broker subscription with multiple consumers.
 
 An updated device payload removes components omitted from the new valid configuration. An empty payload removes every entity currently owned by that discovery topic.
 
 ## Migration
 
-`unique_id` is the primary reconciliation key. If the same unique ID appears on another discovery topic, the existing child is updated instead of duplicated. A standalone `migrate_discovery: true` message is recognized, but full emulation of Home Assistant's internal discovery-hash migration queue is outside 0.1.0.
+`unique_id` is the primary reconciliation key. If the same unique ID appears on another discovery topic, the existing child is updated instead of duplicated. A standalone `migrate_discovery: true` message is recognized, but full emulation of Home Assistant's internal discovery-hash migration queue is outside 0.3.0.
 
 ## Availability
 

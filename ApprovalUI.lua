@@ -14,7 +14,7 @@ end
 local function option(value,text) return {type="option",value=value,text=text} end
 
 function ApprovalUI.new(parent)
-  return setmetatable({parent=parent,scope=nil,externalId=nil,revision=0,lastSignature=nil},ApprovalUI)
+  return setmetatable({parent=parent,scope=nil,externalId=nil,page=1,revision=0,lastSignature=nil},ApprovalUI)
 end
 
 function ApprovalUI:_view(name,property,value)
@@ -86,11 +86,14 @@ function ApprovalUI:refresh(force)
     self.scope=counts.pending>0 and "filter:pending" or "filter:all"
   end
   local entities=self:_entities()
-  local entityOptions=self:_entityOptions(entities)
+  local pageSize=self.parent.config and self.parent.config.approvalPageSize or Constants.APPROVAL_PAGE_SIZE
+  local pageEntities,page,pages,total=ApprovalManager.page(entities,self.page,pageSize)
+  self.page=page
+  local entityOptions=self:_entityOptions(pageEntities)
   if not optionContains(entityOptions,self.externalId) then
     self.externalId=entityOptions[1] and entityOptions[1].value or nil
   end
-  local signatureParts={self.scope,tostring(self.externalId),
+  local signatureParts={self.scope,tostring(self.externalId),tostring(page)..":"..tostring(pages),
     tostring(counts.all)..":"..tostring(counts.active)..":"..tostring(counts.pending)..":"..
     tostring(counts.disabled)..":"..tostring(counts.unsupported)}
   for _,item in ipairs(scopeOptions) do signatureParts[#signatureParts+1]=item.value.."="..item.text end
@@ -103,6 +106,14 @@ function ApprovalUI:refresh(force)
   end
   self:_view("approvalDevice","selectedItem",self.scope)
   self:_view("approvalEntity","selectedItem",self.externalId or "")
+  local first=total==0 and 0 or ((page-1)*pageSize+1)
+  local last=math.min(total,page*pageSize)
+  self:_view("approvalPage","text",string.format("Page %d/%d · showing %d–%d of %d",page,pages,first,last,total))
+  self:_view("btnApprovalPrev","text",page>1 and "Previous page" or "Previous (start)")
+  self:_view("btnApprovalNext","text",page<pages and "Next page" or "Next (end)")
+  local orphanCount=self.parent.childFactory and self.parent.childFactory:orphanCount() or 0
+  local cleanupArmed=self.cleanupExpires and os.time()<=self.cleanupExpires
+  self:_view("btnCleanupOrphans","text",cleanupArmed and "Confirm orphan cleanup" or "Clean orphans ("..orphanCount..")")
   self:_renderSelection()
 
   -- HC3 installs select options asynchronously. Reassert the selection once
@@ -120,7 +131,32 @@ end
 function ApprovalUI:deviceChanged(event)
   local value=tostring(firstEventValue(event) or "")
   if value=="" then return end
-  self.scope=value; self.externalId=nil; self.deleteCandidate=nil; self:refresh(true)
+  self.scope=value; self.externalId=nil; self.page=1; self.deleteCandidate=nil; self:refresh(true)
+end
+
+function ApprovalUI:previousPage()
+  self.page=math.max(1,(self.page or 1)-1); self.externalId=nil; self:refresh(true)
+end
+
+function ApprovalUI:nextPage()
+  self.page=(self.page or 1)+1; self.externalId=nil; self:refresh(true)
+end
+
+function ApprovalUI:cleanupOrphans()
+  local count=self.parent.childFactory and self.parent.childFactory:orphanCount() or 0
+  if count==0 then self:_view("approvalSelection","text","No orphaned children found"); return true,0 end
+  local now=os.time()
+  if not self.cleanupExpires or now>self.cleanupExpires then
+    self.cleanupExpires=now+10
+    self:refresh(true)
+    self:_view("approvalSelection","text","Press Confirm orphan cleanup within 10 seconds to remove "..count.." orphaned child device(s)")
+    return false,"confirmation_required"
+  end
+  self.cleanupExpires=nil
+  local ok,result,removed=self.parent:deleteOrphanedDevices()
+  self:refresh(true)
+  if not ok then return false,result,removed end
+  return true,result
 end
 
 function ApprovalUI:entityChanged(event)

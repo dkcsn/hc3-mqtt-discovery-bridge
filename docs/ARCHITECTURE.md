@@ -9,7 +9,7 @@
 | `Discovery.lua` | Atomic topic-level discovery update orchestration. |
 | `DiscoveryNormalize.lua` | Topic parsing, JSON validation, abbreviations, `~`, Device Discovery and canonical entities. |
 | `SubscriptionRegistry.lua` | Reference-counted exact-topic subscriptions and direct dispatch. |
-| `EntityRegistry.lua` | External-ID and child-ID indexes plus schema-versioned persistence. |
+| `EntityRegistry.lua` | External-ID and child-ID indexes plus compact, chunked A/B persistence and migration. |
 | `ApprovalManager.lua` | Pure approval states, MQTT device grouping, counts and filter rules. |
 | `ApprovalUI.lua` | Dependent HC3 selects, approval actions, details and guarded cleanup. |
 | `EntityMapper.lua` | Component adapters, state conversion and command generation. |
@@ -47,14 +47,17 @@ detach old subscriptions
 update registry and child in place
         │
         ▼
-attach new subscriptions + persist
+attach new subscriptions
+        │
+        ▼
+persist once for the complete discovery transaction
 ```
 
 Preparation occurs before commit. A malformed sibling in Device Discovery is rejected individually; valid siblings can still commit. Missing components in an updated device payload are removed after valid replacements have committed.
 
 ## Identity and restart
 
-Identity priority is `unique_id`, device identifier plus component ID, then a deterministic discovery-topic hash. The child stores `mqttDiscoveryId`; the parent stores a compact canonical entity registry. Startup loads that registry, enumerates children, joins both indexes, recompiles templates and restores exact subscriptions before MQTT states are processed. Display names never participate in identity.
+Identity priority is `unique_id`, device identifier plus component ID, then a deterministic discovery-topic hash. The child stores `mqttDiscoveryId`; the parent stores a compact canonical entity registry. Schema 3 writes verified internal-storage chunks before atomically switching an A/B generation manifest; schema 1/2 QuickApp-variable snapshots migrate automatically. Startup loads that registry, enumerates children, joins both indexes, recompiles templates and restores exact subscriptions before MQTT states are processed. Display names never participate in identity.
 
 ## Shared-state efficiency
 

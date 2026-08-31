@@ -5,7 +5,8 @@ Discovery.__index = Discovery
 
 function Discovery.new(options)
   return setmetatable({prefix=options.prefix, onUpsert=options.onUpsert,
-    onRemove=options.onRemove, logger=options.logger, byTopic={},
+    onRemove=options.onRemove, onTransactionComplete=options.onTransactionComplete,
+    logger=options.logger, byTopic={},
     metrics={messages=0, errors=0}}, Discovery)
 end
 
@@ -21,6 +22,7 @@ function Discovery:process(topic, payload)
   if metadata.remove then
     for externalId in pairs(old) do self.onRemove(externalId, topic) end
     self.byTopic[topic] = nil
+    if self.onTransactionComplete then self.onTransactionComplete(topic,"remove") end
     return true
   end
   if metadata.migration then return true, "migration_acknowledged" end
@@ -38,6 +40,7 @@ function Discovery:process(topic, payload)
   end
   for externalId in pairs(old) do if not nextIds[externalId] then self.onRemove(externalId, topic) end end
   self.byTopic[topic] = nextIds
+  if self.onTransactionComplete then self.onTransactionComplete(topic,"upsert") end
   return true
 end
 

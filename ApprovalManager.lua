@@ -124,4 +124,17 @@ function ApprovalManager.stateLabel(entity)
   return labels[entity and entity.approvalState] or "Unknown"
 end
 
+-- Return one stable page without mutating the caller's sorted collection.
+-- HC3 select controls become difficult to use with hundreds of options.
+function ApprovalManager.page(items,page,pageSize)
+  pageSize=math.max(1,math.floor(tonumber(pageSize) or Constants.APPROVAL_PAGE_SIZE))
+  local total=#(items or {})
+  local pages=math.max(1,math.ceil(total/pageSize))
+  page=math.max(1,math.min(pages,math.floor(tonumber(page) or 1)))
+  local result={}
+  local first=(page-1)*pageSize+1
+  for index=first,math.min(total,first+pageSize-1) do result[#result+1]=items[index] end
+  return result,page,pages,total
+end
+
 return ApprovalManager

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-08-31
+
+- Replaced the single large registry variable with compact, integrity-checked,
+  A/B-generated internal-storage chunks and automatic schema 1/2 migration.
+- Batched Device Discovery persistence to one durable write per transaction.
+- Added paginated approval controls and guarded orphan-child cleanup for large installations.
+- Added native `device_tracker`, `siren` and `fan` adapters and improved JSON/separate-topic light brightness handling.
+- Added unique default MQTT client IDs and a configurable randomized HA Birth delay.
+- Added portable PLua scripts, a deferred Mosquitto smoke test, CI and release checksums.
+- Licensed the public project under PolyForm Noncommercial 1.0.0.
+
 ## 0.2.0 — 2026-08-31
 
 - Added `automatic` and `approval` discovery modes with persistent pending,

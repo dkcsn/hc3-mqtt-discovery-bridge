@@ -31,16 +31,6 @@ EntityMapper.adapters.sensor = {
   end,
   subscriptions=stateTopic,
   state=function(entity, value)
-    if type(value)=="string" and value:match("^%s*{") then
-      local object=Utils.decodeJson(value)
-      if object then
-        local brightness=Utils.number(object.brightness)
-        local scale=Utils.number(entity.config.brightness_scale,255)
-        local isOn=binary(object.state or "",entity.config.payload_on or "ON",entity.config.payload_off or "OFF")
-        if brightness then return {value=Utils.clamp(brightness/scale*100,0,100),state=isOn~=false} end
-        if isOn~=nil then return {value=isOn and math.max(Utils.number(entity.lastValue,100),1) or 0,state=isOn} end
-      end
-    end
     local n = Utils.number(value)
     if not n then return nil, "non_numeric_sensor_value" end
     return {value=n, unit=entity.config.unit_of_measurement}
@@ -78,8 +68,23 @@ EntityMapper.adapters.switch = {
 
 EntityMapper.adapters.light = {
   childType=function() return "com.fibaro.multilevelSwitch" end,
-  subscriptions=stateTopic,
-  state=function(entity, value)
+  subscriptions=function(entity)
+    local topics={}; if entity.stateTopic then topics[#topics+1]=entity.stateTopic end
+    local brightness=entity.config.brightness_state_topic
+    if brightness and brightness~=entity.stateTopic then topics[#topics+1]=brightness end
+    return topics
+  end,
+  state=function(entity, value, topic)
+    if type(value)=="string" and value:match("^%s*{") then
+      local object=Utils.decodeJson(value)
+      if object then
+        local brightness=Utils.number(object.brightness)
+        local scale=Utils.number(entity.config.brightness_scale,255)
+        local isOn=binary(object.state or "",entity.config.payload_on or "ON",entity.config.payload_off or "OFF")
+        if brightness then return {value=Utils.clamp(brightness/scale*100,0,100),state=isOn~=false} end
+        if isOn~=nil then return {value=isOn and math.max(Utils.number(entity.lastValue,100),1) or 0,state=isOn} end
+      end
+    end
     local n = Utils.number(value)
     if n then
       local scale = Utils.number(entity.config.brightness_scale, 255)
@@ -95,7 +100,52 @@ EntityMapper.adapters.light = {
     if action == "setValue" then
       local percent = Utils.clamp(Utils.number(value, 0), 0, 100)
       local scale = Utils.number(entity.config.brightness_scale, 255)
-      return tostring(math.floor(percent / 100 * scale + 0.5)), percent
+      return tostring(math.floor(percent / 100 * scale + 0.5)), percent,
+        entity.config.brightness_command_topic or entity.commandTopic
+    end
+  end,
+}
+
+EntityMapper.adapters.device_tracker = {
+  childType=function() return "com.fibaro.binarySensor" end,
+  subscriptions=stateTopic,
+  state=function(entity,value)
+    local home=entity.config.payload_home or "home"
+    local away=entity.config.payload_not_home or "not_home"
+    local result=binary(value,home,away)
+    if result==nil then return nil,"unknown_tracker_payload" end
+    return {value=result}
+  end,
+}
+
+EntityMapper.adapters.siren = {
+  childType=function() return "com.fibaro.binarySwitch" end,
+  subscriptions=stateTopic,
+  state=EntityMapper.adapters.switch.state,
+  command=EntityMapper.adapters.switch.command,
+}
+
+EntityMapper.adapters.fan = {
+  childType=function() return "com.fibaro.multilevelSwitch" end,
+  subscriptions=function(entity)
+    local topics={}; if entity.stateTopic then topics[#topics+1]=entity.stateTopic end
+    local percentage=entity.config.percentage_state_topic
+    if percentage and percentage~=entity.stateTopic then topics[#topics+1]=percentage end
+    return topics
+  end,
+  state=function(entity,value,topic)
+    local n=Utils.number(value)
+    if n then return {value=Utils.clamp(n,0,100),state=n>0} end
+    local result=binary(value,entity.config.payload_on or "ON",entity.config.payload_off or "OFF")
+    if result==nil then return nil,"unknown_fan_payload" end
+    return {value=result and math.max(Utils.number(entity.lastValue,100),1) or 0,state=result}
+  end,
+  command=function(entity,action,value)
+    if action=="turnOn" then return entity.config.payload_on or "ON",true end
+    if action=="turnOff" then return entity.config.payload_off or "OFF",false end
+    if action=="setValue" then
+      local percent=Utils.clamp(Utils.number(value,0),0,100)
+      return tostring(math.floor(percent+0.5)),percent,entity.config.percentage_command_topic or entity.commandTopic
     end
   end,
 }
@@ -191,10 +241,10 @@ function EntityMapper.subscriptions(entity)
   return topics
 end
 
-function EntityMapper.handleState(entity, child, payload, engine, shared)
+function EntityMapper.handleState(entity, child, payload, engine, shared, topic)
   local adapter=EntityMapper.adapters[entity.component]; if not adapter then return false, "unsupported_component" end
   local value, templateError=payloadValue(entity,payload,engine,shared); if templateError then return false, templateError.message end
-  local properties, err=adapter.state(entity,value); if not properties then return false,err end
+  local properties, err=adapter.state(entity,value,topic); if not properties then return false,err end
   for key, propertyValue in pairs(properties) do
     if propertyValue ~= nil then child:updateProperty(key, propertyValue) end
   end

@@ -1,9 +1,12 @@
 --%%name:HC3 MQTT Discovery Bridge
+-- Licensed under PolyForm Noncommercial 1.0.0:
+-- https://polyformproject.org/licenses/noncommercial/1.0.0
+-- Required Notice: Copyright 2026 dkcsn.
 -- The concrete controller type is required for the parent to appear in the
 -- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
 -- run a QA uploaded with it, but the resulting device has no GUI category.
 --%%type:com.fibaro.deviceController
---%%description:HC3 MQTT Discovery Bridge v0.2.0 — discovery approval and native child devices
+--%%description:HC3 MQTT Discovery Bridge v0.3.0 — scalable discovery approval and native child devices
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils
@@ -34,6 +37,8 @@
 --%%var:publishHABirth="true"
 --%%var:logLevel="INFO"
 --%%var:discoveryMode="automatic"
+--%%var:approvalPageSize="40"
+--%%var:birthDelayMax="5"
 --%%var:mqttEntityRegistry=""
 --%%u:{label="mqttStatus",text="MQTT: Starting"}
 --%%u:{label="brokerStatus",text="Broker: not configured"}
@@ -44,10 +49,13 @@
 --%%u:{label="approvalStatus",text="Approval: Automatic"}
 --%%u:{select="approvalDevice",text="Filter or MQTT device",value="",onToggled="approvalDeviceChanged",options={}}
 --%%u:{select="approvalEntity",text="Entity",value="",onToggled="approvalEntityChanged",options={}}
+--%%u:{label="approvalPage",text="Page 1/1"}
+--%%u:{{button="btnApprovalPrev",text="Previous (start)",onReleased="approvalPreviousPage"},{button="btnApprovalNext",text="Next (end)",onReleased="approvalNextPage"}}
 --%%u:{label="approvalSelection",text="Selected: none"}
 --%%u:{{button="btnApproveEntity",text="Create selected",onReleased="approveSelectedEntity"},{button="btnApproveDevice",text="Create all from device",onReleased="approveSelectedDevice"}}
 --%%u:{{button="btnDisableEntity",text="Disable selected",onReleased="disableSelectedEntity"},{button="btnDeleteEntity",text="Delete from HC3",onReleased="deleteSelectedEntity"}}
 --%%u:{button="btnEntityDetails",text="Entity details",onReleased="selectedEntityDetails"}
+--%%u:{button="btnCleanupOrphans",text="Clean orphans (0)",onReleased="cleanupOrphanedDevices"}
 --%%u:{{button="btnReconnect",text="Reconnect",onReleased="reconnect"},{button="btnDiscover",text="Request Discovery",onReleased="requestDiscovery"}}
 --%%u:{{button="btnReload",text="Reload Registry",onReleased="reloadRegistry"},{button="btnSummary",text="Debug Summary",onReleased="debugSummary"}}
 
@@ -71,6 +79,8 @@ function QuickApp:_readConfig()
     publishHABirth=Utils.bool(variable(self,"publishHABirth",true),true),
     logLevel=tostring(variable(self,"logLevel",Constants.DEFAULTS.logLevel)):upper(),
     discoveryMode=ApprovalManager.normalizeMode(variable(self,"discoveryMode",Constants.DEFAULTS.discoveryMode)),
+    approvalPageSize=math.floor(Utils.clamp(Utils.number(variable(self,"approvalPageSize",40),40),10,100)),
+    birthDelayMax=math.floor(Utils.clamp(Utils.number(variable(self,"birthDelayMax",5),5),0,60)),
   }
 end
 
@@ -86,6 +96,7 @@ end
 
 function QuickApp:onInit()
   self.config=self:_readConfig()
+  if self.config.clientId==Constants.DEFAULTS.clientId then self.config.clientId=self.config.clientId.."-"..tostring(self.id) end
   self.metrics={stateUpdates=0,availabilityUpdates=0,attributeUpdates=0,lastActivity=nil}
   self.unsupportedLogged={}
   self:debug(Constants.NAME.." v"..Constants.VERSION)
@@ -112,9 +123,11 @@ function QuickApp:onInit()
     unsubscribe=function(topic) return self.mqtt:unsubscribe(topic) end})
   self.discovery=Discovery.new({prefix=self.config.discoveryPrefix,logger=logger,
     onUpsert=function(entity,prepareOnly) return self:_upsertEntity(entity,prepareOnly) end,
-    onRemove=function(externalId,topic) return self:_removeEntity(externalId,topic) end})
+    onRemove=function(externalId,topic) return self:_removeEntity(externalId,topic) end,
+    onTransactionComplete=function(topic,operation) self:_discoveryTransactionComplete(topic,operation) end})
 
   self:_restoreEntities()
+  if self.registry.dirty then self:_persistRegistry("startup migration") end
   self:_applyRegisteredIcon()
   self:_updateUI(true)
   self.mqtt:connect()
@@ -128,8 +141,9 @@ function QuickApp:_restoreEntities()
       prepared.approvalState=ApprovalManager.restoreState(prepared,self.config.discoveryMode)
       restored[externalId]=prepared
       if prepared.supported and prepared.approvalState==ApprovalManager.ACTIVE then
-        self.childFactory:ensure(prepared)
-        self:_attachSubscriptions(prepared)
+        local child,childError=self.childFactory:ensure(prepared)
+        if child then self:_attachSubscriptions(prepared)
+        else self:_log("ERROR","CHILD",externalId.." restore failed: "..tostring(childError)) end
       elseif prepared.approvalState==ApprovalManager.DISABLED and prepared.childId then
         local child=self.childDevices[tonumber(prepared.childId)]
         if child then
@@ -155,7 +169,11 @@ function QuickApp:_mqttConnected()
   self.mqtt:subscribe(prefix.."/+/+/config",qos)
   self.mqtt:subscribe(prefix.."/+/+/+/config",qos)
   self.subscriptions:restoreSubscriptions()
-  if self.config.publishHABirth then self:requestDiscovery() end
+  if self.config.publishHABirth then
+    local delay=math.random(0,self.config.birthDelayMax)*1000
+    if self.birthTimer then clearTimeout(self.birthTimer) end
+    self.birthTimer=setTimeout(function() self.birthTimer=nil; if self.mqtt.connected then self:requestDiscovery() end end,delay)
+  end
   self:_updateUI(true)
 end
 
@@ -191,8 +209,21 @@ function QuickApp:_upsertEntity(entity,prepareOnly)
   if old then self.subscriptions:removeEntity(old.externalId) end
   self.registry:put(prepared)
   if prepared.supported and prepared.approvalState==ApprovalManager.ACTIVE then self:_attachSubscriptions(prepared) end
-  self.registry:persist()
   return true,prepared
+end
+
+-- Discovery can expand one Device Discovery payload into many entities. The
+-- transaction callback persists once after all children/subscriptions agree.
+function QuickApp:_persistRegistry(context)
+  if not self.registry or not self.registry.dirty then return true end
+  local ok,err=self.registry:persist()
+  if not ok then self:_log("ERROR","ENTITY","registry persistence failed after "..tostring(context)..": "..tostring(err)) end
+  return ok,err
+end
+
+function QuickApp:_discoveryTransactionComplete(topic,operation)
+  self:_persistRegistry(operation.." "..topic)
+  self:_updateUI(true)
 end
 
 function QuickApp:_attachSubscriptions(entity)
@@ -215,7 +246,7 @@ function QuickApp:_entityMessage(externalId,topic,payload,message)
   if not child then return end
   local shared=message and message.__bridgeShared or {}
   if message then message.__bridgeShared=shared end
-  local ok,err=EntityMapper.handleState(entity,child,payload,self.templateEngine,shared)
+  local ok,err=EntityMapper.handleState(entity,child,payload,self.templateEngine,shared,topic)
   if ok then self.metrics.stateUpdates=self.metrics.stateUpdates+1
   elseif err~="non_numeric_sensor_value" then self:_log("DEBUG","ENTITY",externalId..": "..tostring(err)) end
 end
@@ -251,7 +282,6 @@ function QuickApp:_removeEntity(externalId,discoveryTopic)
   self.subscriptions:removeEntity(externalId)
   self.childFactory:remove(entity)
   self.registry:remove(externalId)
-  self.registry:persist()
   return true
 end
 
@@ -272,7 +302,9 @@ function QuickApp:requestDiscovery()
   return self.mqtt:publish(self.config.discoveryPrefix.."/status","online",false,0)
 end
 function QuickApp:reconnect()
-  self.config=self:_readConfig(); self.mqtt.config=self.config; self.discovery.prefix=self.config.discoveryPrefix
+  self.config=self:_readConfig()
+  if self.config.clientId==Constants.DEFAULTS.clientId then self.config.clientId=self.config.clientId.."-"..tostring(self.id) end
+  self.mqtt.config=self.config; self.discovery.prefix=self.config.discoveryPrefix
   self:_applyDiscoveryMode()
   return self.mqtt:reconnect()
 end
@@ -293,7 +325,7 @@ function QuickApp:_applyDiscoveryMode()
       if ok then activated=activated+1 end
     end
   end
-  if activated>0 then self.registry:persist(); self:_updateUI(true) end
+  if activated>0 then self:_persistRegistry("automatic approval"); self:_updateUI(true) end
   return activated
 end
 
@@ -307,21 +339,23 @@ function QuickApp:setEntityApproval(externalId,state,deferRefresh)
     if not child then return false,err end
     self.subscriptions:removeEntity(externalId)
     entity.approvalState=ApprovalManager.ACTIVE
+    self.registry.dirty=true
     child:updateProperty("dead",false)
     child:updateProperty("deadReason","")
     self:_attachSubscriptions(entity)
-    if not deferRefresh then self.registry:persist(); self:_updateUI(true) end
+    if not deferRefresh then self:_persistRegistry("entity activation"); self:_updateUI(true) end
     return true,child.id
   end
   if state==ApprovalManager.DISABLED then
     self.subscriptions:removeEntity(externalId)
     entity.approvalState=ApprovalManager.DISABLED
+    self.registry.dirty=true
     local child=entity.childId and self.childDevices[tonumber(entity.childId)]
     if child then
       child:updateProperty("dead",true)
       child:updateProperty("deadReason","Disabled in MQTT Discovery Bridge")
     end
-    if not deferRefresh then self.registry:persist(); self:_updateUI(true) end
+    if not deferRefresh then self:_persistRegistry("entity disable"); self:_updateUI(true) end
     return true,entity.childId
   end
   return false,"invalid_approval_state"
@@ -339,7 +373,7 @@ function QuickApp:approveDevice(deviceKey)
     end
   end
   if matched==0 then return false,"device_has_no_supported_entities" end
-  self.registry:persist()
+  self:_persistRegistry("device approval")
   if #errors>0 then return false,table.concat(errors,"; ") end
   self:_updateUI(true)
   return true,{matched=matched,activated=created}
@@ -354,7 +388,8 @@ function QuickApp:deleteEntityChild(externalId)
   local ok,err=self.childFactory:remove(entity)
   if not ok then return false,err end
   entity.approvalState=entity.supported and ApprovalManager.DISABLED or ApprovalManager.UNSUPPORTED
-  self.registry:persist()
+  self.registry.dirty=true
+  self:_persistRegistry("child deletion")
   self:_updateUI(true)
   return true
 end
@@ -385,6 +420,9 @@ function QuickApp:approveSelectedDevice() return self.approvalUI:approveDevice()
 function QuickApp:disableSelectedEntity() return self.approvalUI:disableSelected() end
 function QuickApp:deleteSelectedEntity() return self.approvalUI:deleteSelected() end
 function QuickApp:selectedEntityDetails() return self.approvalUI:details() end
+function QuickApp:approvalPreviousPage() return self.approvalUI:previousPage() end
+function QuickApp:approvalNextPage() return self.approvalUI:nextPage() end
+function QuickApp:cleanupOrphanedDevices() return self.approvalUI:cleanupOrphans() end
 
 function QuickApp:_updateUI(force)
   local now=os.time()
@@ -405,7 +443,7 @@ function QuickApp:_updateUI(force)
   local approval=ApprovalManager.counts(self.registry and self.registry.entities or {})
   self:updateView("approvalStatus","text",string.format("Approval: %s · Active: %d · Pending: %d · Disabled: %d",
     self.config.discoveryMode=="approval" and "Manual" or "Automatic",approval.active,approval.pending,approval.disabled))
-  if self.approvalUI then self.approvalUI:refresh(force) end
+  if self.approvalUI and force then self.approvalUI:refresh(true) end
 end
 
 function QuickApp:_unsupportedCount()

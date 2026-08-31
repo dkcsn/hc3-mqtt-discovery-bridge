@@ -2,10 +2,14 @@
 -- makes compatibility changes reviewable without touching runtime logic.
 Constants = {
   NAME = "HC3 MQTT Discovery Bridge",
-  VERSION = "0.2.0",
+  VERSION = "0.3.0",
   UUID = "9b829884-f9d1-4b45-81cb-6c3d6ca9632a",
-  REGISTRY_SCHEMA = 2,
+  REGISTRY_SCHEMA = 3,
   REGISTRY_VARIABLE = "mqttEntityRegistry",
+  REGISTRY_MANIFEST = "mqttEntityRegistryV3Manifest",
+  REGISTRY_CHUNK_PREFIX = "mqttEntityRegistryV3_",
+  REGISTRY_CHUNK_SIZE = 28000,
+  MAX_REGISTRY_BYTES = 1048576,
   MAX_DISCOVERY_PAYLOAD = 65536,
   MAX_STATE_PAYLOAD = 262144,
   MAX_JSON_NODES = 32768,
@@ -13,6 +17,7 @@ Constants = {
   MAX_TEMPLATE_OUTPUT = 16384,
   MAX_TEMPLATE_CACHE = 512,
   MAX_ENTITIES = 500,
+  APPROVAL_PAGE_SIZE = 40,
   MAX_AST_NODES = 512,
   MAX_AST_DEPTH = 32,
   MAX_FILTER_CHAIN = 32,
@@ -32,15 +37,18 @@ Constants.DEFAULTS = {
   publishHABirth = true,
   logLevel = "INFO",
   discoveryMode = "automatic",
+  approvalPageSize = 40,
+  birthDelayMax = 5,
 }
 
 Constants.TIER1 = {
   sensor = true, binary_sensor = true, switch = true, light = true,
   cover = true, button = true, number = true, select = true,
+  device_tracker = true, siren = true, fan = true,
 }
 
 Constants.PARSE_ONLY = {
-  lock = true, fan = true, climate = true, device_tracker = true, siren = true,
+  lock = true, climate = true,
   text = true, event = true, vacuum = true, valve = true,
   alarm_control_panel = true, camera = true, date = true, datetime = true,
   humidifier = true, image = true, infrared = true, lawn_mower = true,

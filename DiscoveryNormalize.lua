@@ -126,6 +126,15 @@ local function canonical(config, topicInfo, discoveryTopic, componentId)
   }
 end
 
+-- Device Discovery inherits only documented shared options. Arbitrary
+-- component-specific root fields must not leak into every component.
+local DEVICE_SHARED_KEYS = {
+  ["~"]=true,availability=true,availability_mode=true,availability_topic=true,
+  availability_template=true,payload_available=true,payload_not_available=true,
+  qos=true,state_topic=true,json_attributes_topic=true,json_attributes_template=true,
+  entity_category=true,enabled_by_default=true,
+}
+
 function DiscoveryNormalize.payload(discoveryTopic, payload, prefix)
   if type(payload) ~= "string" then return nil, "payload_not_string" end
   if #payload > Constants.MAX_DISCOVERY_PAYLOAD then return nil, "payload_too_large" end
@@ -140,12 +149,13 @@ function DiscoveryNormalize.payload(discoveryTopic, payload, prefix)
   local entities = {}
   if topicInfo.component == "device" then
     if type(decoded.components) ~= "table" then return nil, "device_components_missing" end
-    local shared = Utils.copy(decoded); shared.components = nil
+    local shared={}
+    for key,value in pairs(decoded) do if DEVICE_SHARED_KEYS[key] then shared[key]=Utils.copy(value) end end
     for componentId, componentConfig in pairs(decoded.components) do
       if type(componentConfig) == "table" then
         local merged = Utils.merge(shared, componentConfig)
-        merged.device = componentConfig.device or shared.device
-        merged.origin = componentConfig.origin or shared.origin
+        merged.device = componentConfig.device or decoded.device
+        merged.origin = componentConfig.origin or decoded.origin
         if baseTopic and merged["~"] == nil then merged["~"] = baseTopic end
         merged = expandBase(merged)
         if type(merged.platform) == "string" then
