@@ -1,6 +1,6 @@
 # HC3 MQTT Discovery Bridge
 
-Current release: **0.3.0**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
+Current release: **0.3.1**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
 
 > **License:** Noncommercial use only under [PolyForm Noncommercial 1.0.0](LICENSE.md). Commercial use requires a separate written license from the licensor.
 
@@ -23,7 +23,7 @@ HC3 MQTT Discovery Bridge
 
 ## Current scope
 
-Version 0.3.0 implements a production-oriented bridge with scalable approval and durable storage:
+Version 0.3.1 implements a production-oriented bridge with scalable approval and durable storage:
 
 - MQTT connect, reconnect with bounded exponential backoff and jitter, disconnect, subscribe, unsubscribe and publish;
 - component discovery and Device Discovery, both legal discovery topic shapes;

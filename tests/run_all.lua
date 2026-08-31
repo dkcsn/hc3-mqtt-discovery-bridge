@@ -10,6 +10,7 @@ dofile("EntityMapper.lua")
 dofile("EntityRegistry.lua")
 dofile("ApprovalManager.lua")
 dofile("ChildFactory.lua")
+dofile("MQTTClient.lua")
 dofile("IconData.lua")
 dofile("IconInstaller.lua")
 
@@ -195,6 +196,19 @@ test("shared subscription lifecycle",function()
   equal(subscribed,1); equal(registry:dispatch("device/state","{}",{}),2); equal(received,2)
   registry:removeConsumer("device/state","a"); equal(unsubscribed,0)
   registry:removeConsumer("device/state","b"); equal(unsubscribed,1)
+end)
+
+test("HC3 MQTT client uses closed event",function()
+  local savedMqtt=mqtt
+  local events={}
+  local client={addEventListener=function(_,name,handler) events[name]=handler end,disconnect=function() end}
+  mqtt={Client={connect=function() return client end}}
+  local connection=MQTTConnection.new({config={brokerHost="broker",brokerPort=1883,tls=false,
+    clientId="test",username="",password=""},logger=function() end})
+  local ok,err=connection:connect()
+  mqtt=savedMqtt
+  truthy(ok,err); truthy(events.connected); truthy(events.message); truthy(events.error); truthy(events.closed)
+  equal(events.disconnected,nil,"HC3 MQTT does not support a disconnected event")
 end)
 
 test("switch mapping command",function()

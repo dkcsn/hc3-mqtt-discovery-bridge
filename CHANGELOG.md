@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-08-31
+
+- Fixed a live HC3 crash by using the native MQTT client's `closed` event
+  instead of the unsupported `disconnected` socket event.
+- Made MQTT event registration guarded and fail cleanly if firmware rejects an event.
+- Read optional QuickApp variables without generating HC3 "Variable not found" warnings.
+
 ## 0.3.0 — 2026-08-31
 
 - Replaced the single large registry variable with compact, integrity-checked,

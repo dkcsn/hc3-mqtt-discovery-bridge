@@ -1,6 +1,6 @@
 # Compatibility
 
-Status as of version 0.3.0. `FULL` means the intended basic state/command model is implemented, not every optional Home Assistant attribute.
+Status as of version 0.3.1. `FULL` means the intended basic state/command model is implemented, not every optional Home Assistant attribute.
 
 | HA MQTT component | Level | HC3 child type | State | Commands | Known limitations |
 |---|---|---|---|---|---|

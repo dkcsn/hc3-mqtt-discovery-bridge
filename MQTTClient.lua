@@ -29,10 +29,27 @@ function MQTTConnection:connect()
   local ok, client=pcall(mqtt.Client.connect,self:_uri(),options)
   if not ok or not client then self:_failed(tostring(client)); return false,tostring(client) end
   self.client=client
-  client:addEventListener("connected",function(event) self:_connected(event) end)
-  client:addEventListener("message",function(event) self:_message(event) end)
-  client:addEventListener("error",function(event) self:_failed(event and event.error or "mqtt_error") end)
-  client:addEventListener("disconnected",function() self:_disconnected() end)
+  -- HC3's native MQTT client exposes `closed`; `disconnected` belongs to
+  -- other socket APIs and crashes the QA on firmware that validates names.
+  local function listen(name,handler)
+    local registered,registrationError=pcall(client.addEventListener,client,name,handler)
+    if not registered then
+      self.logger("ERROR","MQTT","could not register "..name.." event: "..tostring(registrationError))
+      return false
+    end
+    return true
+  end
+  local listenersOk=true
+  listenersOk=listen("connected",function(event) self:_connected(event) end) and listenersOk
+  listenersOk=listen("message",function(event) self:_message(event) end) and listenersOk
+  listenersOk=listen("error",function(event)
+    self:_failed(event and (event.error or event.message or event.code) or "mqtt_error")
+  end) and listenersOk
+  listenersOk=listen("closed",function() self:_disconnected() end) and listenersOk
+  if not listenersOk then
+    pcall(function() client:disconnect() end); self.client=nil
+    return false,"mqtt_event_registration_failed"
+  end
   return true
 end
 

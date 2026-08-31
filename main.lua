@@ -6,7 +6,7 @@
 -- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
 -- run a QA uploaded with it, but the resulting device has no GUI category.
 --%%type:com.fibaro.deviceController
---%%description:HC3 MQTT Discovery Bridge v0.3.0 — scalable discovery approval and native child devices
+--%%description:HC3 MQTT Discovery Bridge v0.3.1 — scalable discovery approval and native child devices
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils
@@ -62,8 +62,13 @@
 -- main.lua is intentionally composition-only. Protocol parsing, transport,
 -- persistence, templates and HC3 mappings remain independently testable files.
 local function variable(self,name,default)
-  local value=self:getVariable(name)
-  return (value==nil or value=="") and default or value
+  -- Reading a missing value with getVariable() writes an HC3 warning. Looking
+  -- through the property list keeps new optional settings backward-compatible.
+  local values=self.properties and self.properties.quickAppVariables or {}
+  for _,item in ipairs(values) do
+    if item.name==name then return (item.value==nil or item.value=="") and default or item.value end
+  end
+  return default
 end
 
 function QuickApp:_readConfig()
