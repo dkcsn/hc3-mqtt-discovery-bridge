@@ -2,6 +2,10 @@
 
 This is an intentionally small Jinja-compatible interpreter for MQTT payload templates. It is not Home Assistant's complete Jinja environment.
 
+If the table below is unfamiliar, read [`JINJA_FOR_BEGINNERS.md`](JINJA_FOR_BEGINNERS.md)
+first. It explains where templates come from, how the QA uses them and provides
+copyable MQTT state and command examples.
+
 ```text
 template source → tokenizer → parser → AST cache → safe evaluator → bounded output
 ```

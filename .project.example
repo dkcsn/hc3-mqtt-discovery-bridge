@@ -11,10 +11,14 @@
     "SubscriptionRegistry": "SubscriptionRegistry.lua",
     "EntityMapper": "EntityMapper.lua",
     "EntityRegistry": "EntityRegistry.lua",
+    "ApprovalManager": "ApprovalManager.lua",
+    "ApprovalUI": "ApprovalUI.lua",
     "MQTTClient": "MQTTClient.lua",
     "ChildClasses": "ChildClasses.lua",
     "ChildFactory": "ChildFactory.lua",
-    "IconRegistry": "IconRegistry.lua"
+    "IconRegistry": "IconRegistry.lua",
+    "IconData": "IconData.lua",
+    "IconInstaller": "IconInstaller.lua"
   },
   "id": 0
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 — 2026-08-31
+
+- Added `automatic` and `approval` discovery modes with persistent pending,
+  active, disabled and unsupported states.
+- Added dependent status/device and entity dropdowns, selected-entity details,
+  individual and per-device approval, reversible disable and two-click cleanup.
+- Added schema-1 registry migration that preserves existing active children.
+- Embedded, uploaded and persistently registered the verified 128 × 128 parent icon.
+- Added a beginner-oriented MQTT/Jinja guide with practical state and command examples.
+
 ## 0.1.1 — 2026-08-31
 
 - Fixed the parent QuickApp type to `com.fibaro.deviceController`, ensuring that

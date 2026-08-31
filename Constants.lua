@@ -2,9 +2,9 @@
 -- makes compatibility changes reviewable without touching runtime logic.
 Constants = {
   NAME = "HC3 MQTT Discovery Bridge",
-  VERSION = "0.1.1",
+  VERSION = "0.2.0",
   UUID = "9b829884-f9d1-4b45-81cb-6c3d6ca9632a",
-  REGISTRY_SCHEMA = 1,
+  REGISTRY_SCHEMA = 2,
   REGISTRY_VARIABLE = "mqttEntityRegistry",
   MAX_DISCOVERY_PAYLOAD = 65536,
   MAX_STATE_PAYLOAD = 262144,
@@ -31,6 +31,7 @@ Constants.DEFAULTS = {
   discoveryQoS = 0,
   publishHABirth = true,
   logLevel = "INFO",
+  discoveryMode = "automatic",
 }
 
 Constants.TIER1 = {

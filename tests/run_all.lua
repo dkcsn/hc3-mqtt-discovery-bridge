@@ -8,6 +8,9 @@ dofile("Discovery.lua")
 dofile("SubscriptionRegistry.lua")
 dofile("EntityMapper.lua")
 dofile("EntityRegistry.lua")
+dofile("ApprovalManager.lua")
+dofile("IconData.lua")
+dofile("IconInstaller.lua")
 
 local passed,failed=0,0
 local function test(name,fn)
@@ -25,6 +28,74 @@ test("release version is synchronized",function()
   equal(Constants.VERSION,release)
   local changelog=assert(io.open("CHANGELOG.md","r")); local text=changelog:read("*a"); changelog:close()
   truthy(text:find("## "..release,1,true),"CHANGELOG is missing release "..release)
+  local main=assert(io.open("main.lua","r")); local source=main:read("*a"); main:close()
+  truthy(source:find("--%%%%type:com.fibaro.deviceController"),"main.lua must use the visible controller type")
+  truthy(source:find("v"..release,1,true),"main.lua description is missing release "..release)
+end)
+
+test("approval mode keeps new entity pending",function()
+  local entity={supported=true}
+  equal(ApprovalManager.nextState(entity,nil,"approval"),ApprovalManager.PENDING)
+  equal(ApprovalManager.nextState(entity,nil,"automatic"),ApprovalManager.ACTIVE)
+end)
+
+test("automatic mode activates pending but preserves disabled",function()
+  local entity={supported=true}
+  equal(ApprovalManager.nextState(entity,{approvalState="pending"},"automatic"),ApprovalManager.ACTIVE)
+  equal(ApprovalManager.nextState(entity,{approvalState="disabled"},"automatic"),ApprovalManager.DISABLED)
+end)
+
+test("approval device grouping and filters",function()
+  local entities={
+    a={externalId="a",name="Temperature",component="sensor",supported=true,approvalState="pending",
+      device={name="Kitchen",identifiers={"shelly-kitchen"}}},
+    b={externalId="b",name="Relay",component="switch",supported=true,approvalState="active",
+      device={name="Kitchen",identifiers={"shelly-kitchen"}}},
+    c={externalId="c",name="Battery",component="sensor",supported=true,approvalState="disabled",
+      device={name="Hall",identifiers={"sensor-hall"}}},
+  }
+  local counts=ApprovalManager.counts(entities)
+  equal(counts.all,3); equal(counts.pending,1); equal(counts.active,1); equal(counts.disabled,1)
+  local groups=ApprovalManager.deviceGroups(entities); equal(#groups,2); equal(groups[1].label,"Hall"); equal(groups[2].label,"Kitchen")
+  equal(#ApprovalManager.entitiesForScope(entities,"filter:pending"),1)
+  equal(#ApprovalManager.entitiesForScope(entities,"device:id:shelly-kitchen"),2)
+end)
+
+test("embedded HC3 icon is a 128 pixel PNG",function()
+  local hex=IconData:gsub("%s+",""):lower()
+  truthy(hex:sub(1,16)=="89504e470d0a1a0a","icon data is not PNG")
+  equal(hex:sub(33,40),"00000080","icon width must be 128")
+  equal(hex:sub(41,48),"00000080","icon height must be 128")
+  local file=assert(io.open("assets/mqtt-discovery-128.png","rb")); local bytes=file:read("*a"); file:close()
+  local sourceHex=bytes:gsub(".",function(char) return string.format("%02x",string.byte(char)) end)
+  equal(hex,sourceHex,"embedded icon must match the checked-in 128px asset")
+end)
+
+test("icon installer uploads selects and remembers HC3 id",function()
+  local savedApi,savedNet=api,net
+  local selected,remembered,uploadedBytes
+  api={
+    put=function(_,body) selected=body.properties.deviceIcon; return {properties={deviceIcon=selected}} end,
+    get=function() return {properties={deviceIcon=selected}} end,
+  }
+  net={HTTPClient=function(options) return {options=options} end}
+  local parent={id=42,type="com.fibaro.deviceController",properties={deviceIcon=389},
+    deviceIconTypeMapping={
+      ["com.fibaro.deviceController"]={fileNames={"icon.png"}},
+    }}
+  function parent:updateProperty(name,value) self.properties[name]=value end
+  function parent:uploadIconFiles(data,_,success)
+    uploadedBytes=data.files[1]; success(1091)
+  end
+  local registry={getIconId=function() return nil end,setIconId=function(_,id) remembered=id; return true end}
+  local ran,ok=pcall(function()
+    local installer=IconInstaller.new({parent=parent,registry=registry,pngHex=IconData})
+    return installer:ensure()
+  end)
+  local file=assert(io.open("assets/mqtt-discovery-128.png","rb")); local expected=file:read("*a"); file:close()
+  api,net=savedApi,savedNet
+  truthy(ran,ok); truthy(ok); equal(selected,1091); equal(remembered,1091); equal(parent.properties.deviceIcon,1091)
+  equal(uploadedBytes,expected,"uploader must receive the exact PNG bytes")
 end)
 
 local engine=TemplateEngine.new({})

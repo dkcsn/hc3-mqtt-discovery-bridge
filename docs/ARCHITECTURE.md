@@ -10,6 +10,8 @@
 | `DiscoveryNormalize.lua` | Topic parsing, JSON validation, abbreviations, `~`, Device Discovery and canonical entities. |
 | `SubscriptionRegistry.lua` | Reference-counted exact-topic subscriptions and direct dispatch. |
 | `EntityRegistry.lua` | External-ID and child-ID indexes plus schema-versioned persistence. |
+| `ApprovalManager.lua` | Pure approval states, MQTT device grouping, counts and filter rules. |
+| `ApprovalUI.lua` | Dependent HC3 selects, approval actions, details and guarded cleanup. |
 | `EntityMapper.lua` | Component adapters, state conversion and command generation. |
 | `TemplateParser.lua` | Tokenizer, Pratt expression parser and control-block parser. |
 | `TemplateEvaluator.lua` | Safe AST evaluator, filters and tests. |
@@ -17,6 +19,7 @@
 | `ChildFactory.lua` | Restore/create/update/recreate/remove HC3 children. |
 | `ChildClasses.lua` | HC3 actions delegated back to the parent. No child owns MQTT. |
 | `IconRegistry.lua` | Stable HC3 custom-icon ID registry. |
+| `IconInstaller.lua`, `IconData.lua` | One-time HC3 upload and embedded 128 × 128 PNG bytes. |
 | `Constants.lua`, `Utils.lua` | Protocol tables, bounds and portable helpers. |
 
 The ordering in the `--%%file` headers is the runtime dependency order and the FQA packaging order.

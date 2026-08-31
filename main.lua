@@ -3,7 +3,7 @@
 -- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
 -- run a QA uploaded with it, but the resulting device has no GUI category.
 --%%type:com.fibaro.deviceController
---%%description:HC3 MQTT Discovery Bridge v0.1.1 — native Home Assistant MQTT Discovery consumer
+--%%description:HC3 MQTT Discovery Bridge v0.2.0 — discovery approval and native child devices
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils
@@ -15,10 +15,14 @@
 --%%file:./SubscriptionRegistry.lua,SubscriptionRegistry
 --%%file:./EntityMapper.lua,EntityMapper
 --%%file:./EntityRegistry.lua,EntityRegistry
+--%%file:./ApprovalManager.lua,ApprovalManager
+--%%file:./ApprovalUI.lua,ApprovalUI
 --%%file:./MQTTClient.lua,MQTTClient
 --%%file:./ChildClasses.lua,ChildClasses
 --%%file:./ChildFactory.lua,ChildFactory
 --%%file:./IconRegistry.lua,IconRegistry
+--%%file:./IconData.lua,IconData
+--%%file:./IconInstaller.lua,IconInstaller
 --%%var:brokerHost=""
 --%%var:brokerPort="1883"
 --%%var:username=""
@@ -29,6 +33,7 @@
 --%%var:discoveryQoS="0"
 --%%var:publishHABirth="true"
 --%%var:logLevel="INFO"
+--%%var:discoveryMode="automatic"
 --%%var:mqttEntityRegistry=""
 --%%u:{label="mqttStatus",text="MQTT: Starting"}
 --%%u:{label="brokerStatus",text="Broker: not configured"}
@@ -36,6 +41,13 @@
 --%%u:{label="entityStatus",text="Entities: 0"}
 --%%u:{label="subscriptionStatus",text="Subscriptions: 0"}
 --%%u:{label="activityStatus",text="Last activity: never"}
+--%%u:{label="approvalStatus",text="Approval: Automatic"}
+--%%u:{select="approvalDevice",text="Filter or MQTT device",value="",onToggled="approvalDeviceChanged",options={}}
+--%%u:{select="approvalEntity",text="Entity",value="",onToggled="approvalEntityChanged",options={}}
+--%%u:{label="approvalSelection",text="Selected: none"}
+--%%u:{{button="btnApproveEntity",text="Create selected",onReleased="approveSelectedEntity"},{button="btnApproveDevice",text="Create all from device",onReleased="approveSelectedDevice"}}
+--%%u:{{button="btnDisableEntity",text="Disable selected",onReleased="disableSelectedEntity"},{button="btnDeleteEntity",text="Delete from HC3",onReleased="deleteSelectedEntity"}}
+--%%u:{button="btnEntityDetails",text="Entity details",onReleased="selectedEntityDetails"}
 --%%u:{{button="btnReconnect",text="Reconnect",onReleased="reconnect"},{button="btnDiscover",text="Request Discovery",onReleased="requestDiscovery"}}
 --%%u:{{button="btnReload",text="Reload Registry",onReleased="reloadRegistry"},{button="btnSummary",text="Debug Summary",onReleased="debugSummary"}}
 
@@ -58,6 +70,7 @@ function QuickApp:_readConfig()
     discoveryQoS=math.floor(Utils.clamp(Utils.number(variable(self,"discoveryQoS",0),0),0,2)),
     publishHABirth=Utils.bool(variable(self,"publishHABirth",true),true),
     logLevel=tostring(variable(self,"logLevel",Constants.DEFAULTS.logLevel)):upper(),
+    discoveryMode=ApprovalManager.normalizeMode(variable(self,"discoveryMode",Constants.DEFAULTS.discoveryMode)),
   }
 end
 
@@ -88,6 +101,7 @@ function QuickApp:onInit()
   if not loaded then logger("WARNING","ENTITY","registry ignored: "..tostring(loadError)) end
   self.childFactory=ChildFactory.new({parent=self,registry=self.registry,logger=logger})
   self.childFactory:restore()
+  self.approvalUI=ApprovalUI.new(self)
 
   self.mqtt=MQTTConnection.new({config=self.config,logger=logger,
     onConnected=function(event) self:_mqttConnected(event) end,
@@ -111,10 +125,17 @@ function QuickApp:_restoreEntities()
   for externalId,entity in pairs(self.registry.entities) do
     local prepared,err=EntityMapper.prepare(entity,self.templateEngine)
     if prepared then
+      prepared.approvalState=ApprovalManager.restoreState(prepared,self.config.discoveryMode)
       restored[externalId]=prepared
-      if prepared.supported then
+      if prepared.supported and prepared.approvalState==ApprovalManager.ACTIVE then
         self.childFactory:ensure(prepared)
         self:_attachSubscriptions(prepared)
+      elseif prepared.approvalState==ApprovalManager.DISABLED and prepared.childId then
+        local child=self.childDevices[tonumber(prepared.childId)]
+        if child then
+          child:updateProperty("dead",true)
+          child:updateProperty("deadReason","Disabled in MQTT Discovery Bridge")
+        end
       end
     else self:_log("WARNING","ENTITY",externalId.." restore failed: "..tostring(err)) end
   end
@@ -124,8 +145,9 @@ end
 
 function QuickApp:_applyRegisteredIcon()
   self.iconRegistry=IconRegistry.new({uuid=Constants.UUID,appName=Constants.NAME,iconName="main"})
-  local iconId=self.iconRegistry:getIconId()
-  if iconId then self:updateProperty("deviceIcon",iconId) end
+  self.iconInstaller=IconInstaller.new({parent=self,registry=self.iconRegistry,pngHex=IconData,
+    deviceType="com.fibaro.deviceController",logger=function(level,area,message) self:_log(level,area,message) end})
+  self.iconInstaller:ensure()
 end
 
 function QuickApp:_mqttConnected()
@@ -155,10 +177,11 @@ function QuickApp:_upsertEntity(entity,prepareOnly)
   local old=self.registry:get(prepared.externalId)
   if not old and self.registry:count()>=Constants.MAX_ENTITIES then return false,"entity_limit_reached" end
   if old then prepared.childId=old.childId; prepared.lastValue=old.lastValue end
-  if prepared.supported then
+  prepared.approvalState=ApprovalManager.nextState(prepared,old,self.config.discoveryMode)
+  if prepared.supported and prepared.approvalState==ApprovalManager.ACTIVE then
     local child,childError=self.childFactory:ensure(prepared)
     if not child then return false,childError end
-  else
+  elseif not prepared.supported then
     if old and old.childId then self.childFactory:remove(old) end
     if not self.unsupportedLogged[prepared.component] then
       self.unsupportedLogged[prepared.component]=true
@@ -167,7 +190,7 @@ function QuickApp:_upsertEntity(entity,prepareOnly)
   end
   if old then self.subscriptions:removeEntity(old.externalId) end
   self.registry:put(prepared)
-  if prepared.supported then self:_attachSubscriptions(prepared) end
+  if prepared.supported and prepared.approvalState==ApprovalManager.ACTIVE then self:_attachSubscriptions(prepared) end
   self.registry:persist()
   return true,prepared
 end
@@ -250,6 +273,7 @@ function QuickApp:requestDiscovery()
 end
 function QuickApp:reconnect()
   self.config=self:_readConfig(); self.mqtt.config=self.config; self.discovery.prefix=self.config.discoveryPrefix
+  self:_applyDiscoveryMode()
   return self.mqtt:reconnect()
 end
 function QuickApp:reloadRegistry()
@@ -257,19 +281,110 @@ function QuickApp:reloadRegistry()
   local ok,err=self.registry:load(); if not ok then return false,err end
   self.discovery.byTopic={}; self:_restoreEntities(); self:_updateUI(true); return true
 end
+
+-- Switching to automatic mode activates pending discoveries. Explicitly
+-- disabled entities are a user choice and therefore remain disabled.
+function QuickApp:_applyDiscoveryMode()
+  if self.config.discoveryMode~="automatic" then return 0 end
+  local activated=0
+  for externalId,entity in pairs(self.registry.entities) do
+    if entity.supported and entity.approvalState==ApprovalManager.PENDING then
+      local ok=self:setEntityApproval(externalId,ApprovalManager.ACTIVE,true)
+      if ok then activated=activated+1 end
+    end
+  end
+  if activated>0 then self.registry:persist(); self:_updateUI(true) end
+  return activated
+end
+
+function QuickApp:setEntityApproval(externalId,state,deferRefresh)
+  local entity=self.registry:get(externalId)
+  if not entity then return false,"entity_not_found" end
+  if not entity.supported then return false,"unsupported_component" end
+  if state==ApprovalManager.ACTIVE then
+    if entity.approvalState==ApprovalManager.ACTIVE and entity.childId then return true,entity.childId end
+    local child,err=self.childFactory:ensure(entity)
+    if not child then return false,err end
+    self.subscriptions:removeEntity(externalId)
+    entity.approvalState=ApprovalManager.ACTIVE
+    child:updateProperty("dead",false)
+    child:updateProperty("deadReason","")
+    self:_attachSubscriptions(entity)
+    if not deferRefresh then self.registry:persist(); self:_updateUI(true) end
+    return true,child.id
+  end
+  if state==ApprovalManager.DISABLED then
+    self.subscriptions:removeEntity(externalId)
+    entity.approvalState=ApprovalManager.DISABLED
+    local child=entity.childId and self.childDevices[tonumber(entity.childId)]
+    if child then
+      child:updateProperty("dead",true)
+      child:updateProperty("deadReason","Disabled in MQTT Discovery Bridge")
+    end
+    if not deferRefresh then self.registry:persist(); self:_updateUI(true) end
+    return true,entity.childId
+  end
+  return false,"invalid_approval_state"
+end
+
+function QuickApp:approveDevice(deviceKey)
+  local matched,created,errors=0,0,{}
+  for externalId,entity in pairs(self.registry.entities) do
+    if ApprovalManager.deviceKey(entity)==deviceKey and entity.supported then
+      matched=matched+1
+      if entity.approvalState~=ApprovalManager.ACTIVE then
+        local ok,err=self:setEntityApproval(externalId,ApprovalManager.ACTIVE,true)
+        if ok then created=created+1 else errors[#errors+1]=externalId..": "..tostring(err) end
+      end
+    end
+  end
+  if matched==0 then return false,"device_has_no_supported_entities" end
+  self.registry:persist()
+  if #errors>0 then return false,table.concat(errors,"; ") end
+  self:_updateUI(true)
+  return true,{matched=matched,activated=created}
+end
+
+-- Remove only the HC3 child. The discovery record is retained as disabled so
+-- a retained MQTT config cannot immediately recreate the device.
+function QuickApp:deleteEntityChild(externalId)
+  local entity=self.registry:get(externalId)
+  if not entity then return false,"entity_not_found" end
+  self.subscriptions:removeEntity(externalId)
+  local ok,err=self.childFactory:remove(entity)
+  if not ok then return false,err end
+  entity.approvalState=entity.supported and ApprovalManager.DISABLED or ApprovalManager.UNSUPPORTED
+  self.registry:persist()
+  self:_updateUI(true)
+  return true
+end
+
 function QuickApp:deleteOrphanedDevices() return self.childFactory:deleteOrphans() end
 function QuickApp:getEntity(externalId) return Utils.copy(self.registry:get(externalId)) end
 function QuickApp:getEntities() return self.registry:list() end
 function QuickApp:getStatus()
+  local approval=ApprovalManager.counts(self.registry.entities)
   return {version=Constants.VERSION,connected=self.mqtt.connected,broker=self.config.brokerHost,
     discoveryPrefix=self.config.discoveryPrefix,entities=self.registry:count(),
-    subscriptions=self.subscriptions:count(),unsupported=self:_unsupportedCount()}
+    subscriptions=self.subscriptions:count(),unsupported=self:_unsupportedCount(),
+    discoveryMode=self.config.discoveryMode,active=approval.active,pending=approval.pending,
+    disabled=approval.disabled}
 end
 function QuickApp:publish(topic,payload,retain,qos) return self.mqtt:publish(topic,payload,retain,qos) end
 function QuickApp:sendCommand(externalId,action,value)
   local entity=self.registry:get(externalId); if not entity or not entity.childId then return false,"entity_not_found" end
   return self:handleChildAction(entity.childId,action,value)
 end
+
+-- HC3 UI callbacks are intentionally thin; ApprovalUI owns selection state
+-- while the methods above own all persistent and device-changing behavior.
+function QuickApp:approvalDeviceChanged(event) return self.approvalUI:deviceChanged(event) end
+function QuickApp:approvalEntityChanged(event) return self.approvalUI:entityChanged(event) end
+function QuickApp:approveSelectedEntity() return self.approvalUI:approveSelected() end
+function QuickApp:approveSelectedDevice() return self.approvalUI:approveDevice() end
+function QuickApp:disableSelectedEntity() return self.approvalUI:disableSelected() end
+function QuickApp:deleteSelectedEntity() return self.approvalUI:deleteSelected() end
+function QuickApp:selectedEntityDetails() return self.approvalUI:details() end
 
 function QuickApp:_updateUI(force)
   local now=os.time()
@@ -287,6 +402,10 @@ function QuickApp:_updateUI(force)
   self:updateView("entityStatus","text",string.format("Entities: %d · Unsupported: %d",self.registry and self.registry:count() or 0,self:_unsupportedCount()))
   self:updateView("subscriptionStatus","text","Subscriptions: "..(self.subscriptions and self.subscriptions:count() or 0))
   self:updateView("activityStatus","text","Last activity: "..(self.metrics.lastActivity and os.date("%Y-%m-%d %H:%M:%S",self.metrics.lastActivity) or "never"))
+  local approval=ApprovalManager.counts(self.registry and self.registry.entities or {})
+  self:updateView("approvalStatus","text",string.format("Approval: %s · Active: %d · Pending: %d · Disabled: %d",
+    self.config.discoveryMode=="approval" and "Manual" or "Automatic",approval.active,approval.pending,approval.disabled))
+  if self.approvalUI then self.approvalUI:refresh(force) end
 end
 
 function QuickApp:_unsupportedCount()
@@ -295,13 +414,24 @@ function QuickApp:_unsupportedCount()
   return count
 end
 
+function QuickApp:_childCount()
+  local count=0
+  if self.registry then
+    for _,entity in pairs(self.registry.entities) do if entity.childId then count=count+1 end end
+  end
+  return count
+end
+
 function QuickApp:debugSummary()
   local tm=self.templateEngine:getMetrics()
+  local approval=ApprovalManager.counts(self.registry.entities)
   local lines={Constants.NAME.." v"..Constants.VERSION,"",
     "MQTT: "..(self.mqtt.connected and "connected" or "disconnected"),
     "Broker: "..self.config.brokerHost..":"..self.config.brokerPort,
-    "Discovery prefix: "..self.config.discoveryPrefix,"",
-    "Entities: "..self.registry:count(),"Children: "..tostring(self.registry:count()-self:_unsupportedCount()),
+    "Discovery prefix: "..self.config.discoveryPrefix,
+    "Discovery mode: "..self.config.discoveryMode,"",
+    "Entities: "..self.registry:count(),"Children: "..self:_childCount(),
+    "Active: "..approval.active,"Pending: "..approval.pending,"Disabled: "..approval.disabled,
     "Unsupported: "..self:_unsupportedCount(),"Subscriptions: "..self.subscriptions:count(),"",
     "Templates compiled: "..tm.compiled,"Template cache hits: "..tm.cacheHits,
     "Template evaluations: "..tm.evaluations,"Template errors: "..tm.errors,
