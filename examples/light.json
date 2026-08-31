@@ -1,0 +1,1 @@
+{"name":"Desk Light","unique_id":"desk_light","state_topic":"desk/light/state","command_topic":"desk/light/set","brightness":true,"brightness_scale":255}

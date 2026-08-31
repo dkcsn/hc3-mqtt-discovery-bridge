@@ -1,0 +1,1 @@
+{"topic":"homeassistant/switch/tasmota_relay/config","payload":{"name":"Tasmota Relay","uniq_id":"tasmota_relay_1","stat_t":"stat/tasmota/POWER","cmd_t":"cmnd/tasmota/POWER","pl_on":"ON","pl_off":"OFF","avty_t":"tele/tasmota/LWT","pl_avail":"Online","pl_not_avail":"Offline"}}

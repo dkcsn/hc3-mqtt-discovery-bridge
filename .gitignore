@@ -1,0 +1,8 @@
+.env
+.env.*
+.project
+.plua/
+*.fqa
+!dist/*.fqa
+.DS_Store
+/ChatGPT Image*.png

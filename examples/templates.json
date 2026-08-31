@@ -1,0 +1,1 @@
+{"json_path":"{{ value_json.environment.temperature }}","conversion":"{{ (value_json.temperature | float) * 1.8 + 32 }}","conditional":"{% if value_json.online %}{{ value_json.temperature | float | round(1) }}{% else %}unavailable{% endif %}","command":"{\"brightness\": {{ value }} }"}

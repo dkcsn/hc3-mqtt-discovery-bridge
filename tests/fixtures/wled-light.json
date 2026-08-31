@@ -1,0 +1,1 @@
+{"topic":"homeassistant/light/wled/config","payload":{"name":"WLED","unique_id":"wled_main","state_topic":"wled/state","command_topic":"wled/set","brightness":true,"brightness_scale":255,"effect":true}}

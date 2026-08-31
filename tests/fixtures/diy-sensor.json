@@ -1,0 +1,1 @@
+{"topic":"homeassistant/sensor/workshop_temperature/config","payload":{"~":"diy/workshop","name":"Workshop Temperature","unique_id":"diy_workshop_temp","state_topic":"~/state","value_template":"{{ value_json.temperature | float | round(1) }}","device_class":"temperature","unit_of_measurement":"°C"}}

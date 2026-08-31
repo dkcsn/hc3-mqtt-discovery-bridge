@@ -1,0 +1,1 @@
+{"topic":"homeassistant/sensor/gateway/rssi/config","payload":{"name":"Gateway RSSI","unique_id":"omg_rssi","state_topic":"home/OpenMQTTGateway/SYStoMQTT","value_template":"{{ value_json.rssi | float }}","device_class":"signal_strength","unit_of_measurement":"dBm"}}
