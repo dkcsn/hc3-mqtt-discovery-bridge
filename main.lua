@@ -1,6 +1,9 @@
 --%%name:HC3 MQTT Discovery Bridge
---%%type:com.fibaro.device
---%%description:HC3 MQTT Discovery Bridge v0.1.0 — native Home Assistant MQTT Discovery consumer
+-- The concrete controller type is required for the parent to appear in the
+-- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
+-- run a QA uploaded with it, but the resulting device has no GUI category.
+--%%type:com.fibaro.deviceController
+--%%description:HC3 MQTT Discovery Bridge v0.1.1 — native Home Assistant MQTT Discovery consumer
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils

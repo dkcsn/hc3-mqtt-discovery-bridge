@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-08-31
+
+- Fixed the parent QuickApp type to `com.fibaro.deviceController`, ensuring that
+  HC3 gives it a valid device category and displays it in the Devices GUI.
+- Documented why the abstract `com.fibaro.device` base type must not be used for
+  direct QuickApp installation.
+
 ## 0.1.0 — 2026-08-31
 
 - Added native HC3 MQTT connection lifecycle with reconnect backoff and jitter.

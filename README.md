@@ -1,6 +1,6 @@
 # HC3 MQTT Discovery Bridge
 
-Current release: **0.1.0**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
+Current release: **0.1.1**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
 
 Native FIBARO Home Center 3 QuickApp that consumes Home Assistant-compatible MQTT Discovery from an external broker and creates HC3 child devices. Home Assistant itself is not required; its MQTT Discovery protocol is the compatibility layer.
 
@@ -21,7 +21,7 @@ HC3 MQTT Discovery Bridge
 
 ## Current scope
 
-Version 0.1.0 implements the first production-oriented vertical slice plus all Tier 1 adapters:
+Version 0.1.1 implements the first production-oriented vertical slice plus all Tier 1 adapters:
 
 - MQTT connect, reconnect with bounded exponential backoff and jitter, disconnect, subscribe, unsubscribe and publish;
 - component discovery and Device Discovery, both legal discovery topic shapes;
@@ -45,6 +45,10 @@ env HOME=/Users/dkcsn /Users/dkcsn/Documents/PLUA/.venv313/bin/plua --tool uploa
 ```
 
 After the initial upload, copy `.project.example` to `.project`, enter the HC3 device ID returned by the upload, and use `updateQA` for later full updates. `updateFile` is useful for a single source file.
+
+The parent uses `com.fibaro.deviceController`. Do not replace it with the abstract
+`com.fibaro.device` base type: HC3 accepts and runs such an upload, but does not
+list it as a normal device in the web GUI.
 
 ## QuickApp variables
 
