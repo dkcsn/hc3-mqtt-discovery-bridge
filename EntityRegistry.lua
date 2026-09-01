@@ -55,7 +55,7 @@ end
 function EntityRegistry:_decode(encoded)
   local data,err=Utils.decodeJson(encoded)
   if not data then return nil,err end
-  if (data.schema~=1 and data.schema~=2 and data.schema~=Constants.REGISTRY_SCHEMA) or type(data.entities)~="table" then
+  if data.schema~=Constants.REGISTRY_SCHEMA or type(data.entities)~="table" then
     return nil,"unsupported_registry_schema"
   end
   return data
@@ -87,16 +87,9 @@ function EntityRegistry:load()
   local data,err=self:_decode(encoded); if not data then return false,err end
   self.entities = data.entities
   for externalId,entity in pairs(self.entities) do
-    -- Schema 1 predates manual approval. A persisted child is authoritative
-    -- evidence that the entity was active; unsupported entries stay inert.
-    if data.schema==1 or entity.approvalState==nil then
-      if entity.supported==false then entity.approvalState="unsupported"
-      elseif entity.childId then entity.approvalState="active"
-      else entity.approvalState="pending" end
-    end
     if entity.childId then self.byChild[tonumber(entity.childId)]=externalId end
   end
-  self.dirty=data.schema~=Constants.REGISTRY_SCHEMA or manifest==nil
+  self.dirty=manifest==nil
   return true
 end
 

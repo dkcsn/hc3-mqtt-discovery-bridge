@@ -6,7 +6,7 @@
 -- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
 -- run a QA uploaded with it, but the resulting device has no GUI category.
 --%%type:com.fibaro.deviceController
---%%description:HC3 MQTT Discovery Bridge v0.3.1 — scalable discovery approval and native child devices
+--%%description:HC3 MQTT Discovery Bridge v0.3.2 — scalable discovery approval and native child devices
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils
@@ -34,30 +34,24 @@
 --%%var:clientId="hc3-mqtt-discovery"
 --%%var:discoveryPrefix="homeassistant"
 --%%var:discoveryQoS="0"
---%%var:publishHABirth="true"
 --%%var:logLevel="INFO"
 --%%var:discoveryMode="automatic"
 --%%var:approvalPageSize="40"
---%%var:birthDelayMax="5"
 --%%var:mqttEntityRegistry=""
 --%%u:{label="mqttStatus",text="MQTT: Starting"}
---%%u:{label="brokerStatus",text="Broker: not configured"}
---%%u:{label="discoveryStatus",text="Discovery: homeassistant"}
---%%u:{label="entityStatus",text="Entities: 0"}
---%%u:{label="subscriptionStatus",text="Subscriptions: 0"}
+--%%u:{label="discoveryStatus",text="Discovery: homeassistant · Automatic"}
+--%%u:{label="entityStatus",text="0 pending · 0 active · 0 unsupported"}
+--%%u:{label="subscriptionStatus",text="0 children · 0 MQTT topics"}
 --%%u:{label="activityStatus",text="Last activity: never"}
---%%u:{label="approvalStatus",text="Approval: Automatic"}
 --%%u:{select="approvalDevice",text="Filter or MQTT device",value="",onToggled="approvalDeviceChanged",options={}}
 --%%u:{select="approvalEntity",text="Entity",value="",onToggled="approvalEntityChanged",options={}}
 --%%u:{label="approvalPage",text="Page 1/1"}
 --%%u:{{button="btnApprovalPrev",text="Previous (start)",onReleased="approvalPreviousPage"},{button="btnApprovalNext",text="Next (end)",onReleased="approvalNextPage"}}
---%%u:{label="approvalSelection",text="Selected: none"}
---%%u:{{button="btnApproveEntity",text="Create selected",onReleased="approveSelectedEntity"},{button="btnApproveDevice",text="Create all from device",onReleased="approveSelectedDevice"}}
---%%u:{{button="btnDisableEntity",text="Disable selected",onReleased="disableSelectedEntity"},{button="btnDeleteEntity",text="Delete from HC3",onReleased="deleteSelectedEntity"}}
---%%u:{button="btnEntityDetails",text="Entity details",onReleased="selectedEntityDetails"}
---%%u:{button="btnCleanupOrphans",text="Clean orphans (0)",onReleased="cleanupOrphanedDevices"}
---%%u:{{button="btnReconnect",text="Reconnect",onReleased="reconnect"},{button="btnDiscover",text="Request Discovery",onReleased="requestDiscovery"}}
---%%u:{{button="btnReload",text="Reload Registry",onReleased="reloadRegistry"},{button="btnSummary",text="Debug Summary",onReleased="debugSummary"}}
+--%%u:{label="approvalSelection",text="No entity selected"}
+--%%u:{{button="btnEntityPrimary",text="Select an entity",onReleased="entityPrimaryAction"},{button="btnEntitySecondary",text="Entity details",onReleased="entitySecondaryAction"}}
+--%%u:{button="btnApproveDevice",text="Select MQTT device for bulk create",onReleased="approveSelectedDevice"}
+--%%u:{select="maintenanceAction",text="Maintenance",value="none",onToggled="maintenanceActionChanged",options={}}
+--%%u:{button="btnMaintenanceRun",text="Run maintenance",onReleased="runMaintenanceAction"}
 
 -- main.lua is intentionally composition-only. Protocol parsing, transport,
 -- persistence, templates and HC3 mappings remain independently testable files.
@@ -81,11 +75,9 @@ function QuickApp:_readConfig()
     clientId=tostring(variable(self,"clientId",Constants.DEFAULTS.clientId)),
     discoveryPrefix=tostring(variable(self,"discoveryPrefix",Constants.DEFAULTS.discoveryPrefix)),
     discoveryQoS=math.floor(Utils.clamp(Utils.number(variable(self,"discoveryQoS",0),0),0,2)),
-    publishHABirth=Utils.bool(variable(self,"publishHABirth",true),true),
     logLevel=tostring(variable(self,"logLevel",Constants.DEFAULTS.logLevel)):upper(),
     discoveryMode=ApprovalManager.normalizeMode(variable(self,"discoveryMode",Constants.DEFAULTS.discoveryMode)),
     approvalPageSize=math.floor(Utils.clamp(Utils.number(variable(self,"approvalPageSize",40),40),10,100)),
-    birthDelayMax=math.floor(Utils.clamp(Utils.number(variable(self,"birthDelayMax",5),5),0,60)),
   }
 end
 
@@ -105,11 +97,6 @@ function QuickApp:onInit()
   self.metrics={stateUpdates=0,availabilityUpdates=0,attributeUpdates=0,lastActivity=nil}
   self.unsupportedLogged={}
   self:debug(Constants.NAME.." v"..Constants.VERSION)
-  -- Expose release identity through standard HC3 device metadata. This makes
-  -- the installed version visible without opening source code or logs.
-  self:updateProperty("manufacturer","FIBARO Community")
-  self:updateProperty("model",Constants.NAME.." v"..Constants.VERSION)
-  self:updateProperty("quickAppUuid",Constants.UUID)
   local function logger(level,area,message) self:_log(level,area,message) end
   self.templateEngine=TemplateEngine.new({logger=logger})
   self.registry=EntityRegistry.new({parent=self,logger=logger})
@@ -132,7 +119,7 @@ function QuickApp:onInit()
     onTransactionComplete=function(topic,operation) self:_discoveryTransactionComplete(topic,operation) end})
 
   self:_restoreEntities()
-  if self.registry.dirty then self:_persistRegistry("startup migration") end
+  if self.registry.dirty then self:_persistRegistry("startup") end
   self:_applyRegisteredIcon()
   self:_updateUI(true)
   self.mqtt:connect()
@@ -174,11 +161,6 @@ function QuickApp:_mqttConnected()
   self.mqtt:subscribe(prefix.."/+/+/config",qos)
   self.mqtt:subscribe(prefix.."/+/+/+/config",qos)
   self.subscriptions:restoreSubscriptions()
-  if self.config.publishHABirth then
-    local delay=math.random(0,self.config.birthDelayMax)*1000
-    if self.birthTimer then clearTimeout(self.birthTimer) end
-    self.birthTimer=setTimeout(function() self.birthTimer=nil; if self.mqtt.connected then self:requestDiscovery() end end,delay)
-  end
   self:_updateUI(true)
 end
 
@@ -369,15 +351,14 @@ end
 function QuickApp:approveDevice(deviceKey)
   local matched,created,errors=0,0,{}
   for externalId,entity in pairs(self.registry.entities) do
-    if ApprovalManager.deviceKey(entity)==deviceKey and entity.supported then
+    if ApprovalManager.deviceKey(entity)==deviceKey and entity.supported and
+       entity.approvalState==ApprovalManager.PENDING then
       matched=matched+1
-      if entity.approvalState~=ApprovalManager.ACTIVE then
-        local ok,err=self:setEntityApproval(externalId,ApprovalManager.ACTIVE,true)
-        if ok then created=created+1 else errors[#errors+1]=externalId..": "..tostring(err) end
-      end
+      local ok,err=self:setEntityApproval(externalId,ApprovalManager.ACTIVE,true)
+      if ok then created=created+1 else errors[#errors+1]=externalId..": "..tostring(err) end
     end
   end
-  if matched==0 then return false,"device_has_no_supported_entities" end
+  if matched==0 then return false,"device_has_no_pending_entities" end
   self:_persistRegistry("device approval")
   if #errors>0 then return false,table.concat(errors,"; ") end
   self:_updateUI(true)
@@ -400,6 +381,44 @@ function QuickApp:deleteEntityChild(externalId)
 end
 
 function QuickApp:deleteOrphanedDevices() return self.childFactory:deleteOrphans() end
+
+-- Temporarily observes the exact topics belonging to one UI-selected entity.
+-- The normal subscription registry owns the probe, so shared topics remain
+-- subscribed and cleanup cannot disturb an active entity.
+function QuickApp:probeEntity(externalId)
+  local entity=self.registry:get(externalId)
+  if not entity then return false,"entity_not_found" end
+  if not self.mqtt.connected then return false,"mqtt_not_connected" end
+  local topics=EntityMapper.subscriptions(entity)
+  if #topics==0 then return false,"entity_has_no_state_topics" end
+  if self.entityProbe then self.subscriptions:removeEntity(self.entityProbe.consumerId) end
+  local consumerId="__probe:"..externalId
+  local probe={consumerId=consumerId,externalId=externalId,expires=os.time()+30,received=0}
+  self.entityProbe=probe
+  for _,topic in ipairs(topics) do
+    self.subscriptions:addConsumer(topic,consumerId,function(payload)
+      if self.entityProbe~=probe then return end
+      probe.received=probe.received+1
+      local excerpt=tostring(payload or ""):gsub("[%c]"," ")
+      if #excerpt>300 then excerpt=excerpt:sub(1,300).."..." end
+      self:debug("[ENTITY PROBE] "..externalId.." · "..topic.." · "..excerpt)
+      if self.approvalUI then
+        self.approvalUI:_view("approvalSelection","text",
+          "Probe received "..topic.." · see log for payload")
+      end
+    end,entity.qos)
+  end
+  self:debug("[ENTITY PROBE] armed "..externalId.." for 30 seconds · "..table.concat(topics,", "))
+  setTimeout(function()
+    if self.entityProbe==probe then
+      self.subscriptions:removeEntity(consumerId)
+      self.entityProbe=nil
+      self:debug("[ENTITY PROBE] finished "..externalId.." · messages "..probe.received)
+    end
+  end,30000)
+  return true,{topics=topics,seconds=30}
+end
+
 function QuickApp:getEntity(externalId) return Utils.copy(self.registry:get(externalId)) end
 function QuickApp:getEntities() return self.registry:list() end
 function QuickApp:getStatus()
@@ -425,6 +444,11 @@ function QuickApp:approveSelectedDevice() return self.approvalUI:approveDevice()
 function QuickApp:disableSelectedEntity() return self.approvalUI:disableSelected() end
 function QuickApp:deleteSelectedEntity() return self.approvalUI:deleteSelected() end
 function QuickApp:selectedEntityDetails() return self.approvalUI:details() end
+function QuickApp:probeSelectedEntity() return self.approvalUI:probeSelected() end
+function QuickApp:entityPrimaryAction() return self.approvalUI:primarySelected() end
+function QuickApp:entitySecondaryAction() return self.approvalUI:secondarySelected() end
+function QuickApp:maintenanceActionChanged(event) return self.approvalUI:maintenanceChanged(event) end
+function QuickApp:runMaintenanceAction() return self.approvalUI:runMaintenance() end
 function QuickApp:approvalPreviousPage() return self.approvalUI:previousPage() end
 function QuickApp:approvalNextPage() return self.approvalUI:nextPage() end
 function QuickApp:cleanupOrphanedDevices() return self.approvalUI:cleanupOrphans() end
@@ -439,15 +463,17 @@ function QuickApp:_updateUI(force)
   end
   self.uiLastUpdate=now
   local connected=self.mqtt and self.mqtt.connected
-  self:updateView("mqttStatus","text","MQTT: "..(connected and "Connected" or "Disconnected"))
-  self:updateView("brokerStatus","text","Broker: "..(self.config.brokerHost~="" and self.config.brokerHost or "not configured"))
-  self:updateView("discoveryStatus","text","Discovery: "..self.config.discoveryPrefix)
-  self:updateView("entityStatus","text",string.format("Entities: %d · Unsupported: %d",self.registry and self.registry:count() or 0,self:_unsupportedCount()))
-  self:updateView("subscriptionStatus","text","Subscriptions: "..(self.subscriptions and self.subscriptions:count() or 0))
-  self:updateView("activityStatus","text","Last activity: "..(self.metrics.lastActivity and os.date("%Y-%m-%d %H:%M:%S",self.metrics.lastActivity) or "never"))
+  local broker=self.config.brokerHost~="" and self.config.brokerHost or "not configured"
+  self:updateView("mqttStatus","text","MQTT: "..(connected and "Connected" or "Disconnected").." · "..broker)
+  self:updateView("discoveryStatus","text","Discovery: "..self.config.discoveryPrefix.." · "..
+    (self.config.discoveryMode=="approval" and "Manual approval" or "Automatic"))
   local approval=ApprovalManager.counts(self.registry and self.registry.entities or {})
-  self:updateView("approvalStatus","text",string.format("Approval: %s · Active: %d · Pending: %d · Disabled: %d",
-    self.config.discoveryMode=="approval" and "Manual" or "Automatic",approval.active,approval.pending,approval.disabled))
+  self:updateView("entityStatus","text",string.format("%d pending · %d active · %d unsupported",
+    approval.pending,approval.active,approval.unsupported))
+  local children=self:_childCount()
+  self:updateView("subscriptionStatus","text",string.format("%d %s · %d MQTT topics",
+    children,children==1 and "child" or "children",self.subscriptions and self.subscriptions:count() or 0))
+  self:updateView("activityStatus","text","Last activity: "..(self.metrics.lastActivity and os.date("%Y-%m-%d %H:%M:%S",self.metrics.lastActivity) or "never"))
   if self.approvalUI and force then self.approvalUI:refresh(true) end
 end
 

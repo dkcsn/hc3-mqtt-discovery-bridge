@@ -2,12 +2,12 @@
 -- makes compatibility changes reviewable without touching runtime logic.
 Constants = {
   NAME = "HC3 MQTT Discovery Bridge",
-  VERSION = "0.3.1",
+  VERSION = "0.3.2",
   UUID = "9b829884-f9d1-4b45-81cb-6c3d6ca9632a",
-  REGISTRY_SCHEMA = 3,
+  REGISTRY_SCHEMA = 4,
   REGISTRY_VARIABLE = "mqttEntityRegistry",
-  REGISTRY_MANIFEST = "mqttEntityRegistryV3Manifest",
-  REGISTRY_CHUNK_PREFIX = "mqttEntityRegistryV3_",
+  REGISTRY_MANIFEST = "mqttEntityRegistryV4Manifest",
+  REGISTRY_CHUNK_PREFIX = "mqttEntityRegistryV4_",
   REGISTRY_CHUNK_SIZE = 28000,
   MAX_REGISTRY_BYTES = 1048576,
   MAX_DISCOVERY_PAYLOAD = 65536,
@@ -34,11 +34,9 @@ Constants.DEFAULTS = {
   clientId = "hc3-mqtt-discovery",
   discoveryPrefix = "homeassistant",
   discoveryQoS = 0,
-  publishHABirth = true,
   logLevel = "INFO",
   discoveryMode = "automatic",
   approvalPageSize = 40,
-  birthDelayMax = 5,
 }
 
 Constants.TIER1 = {

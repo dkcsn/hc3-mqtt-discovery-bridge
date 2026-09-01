@@ -3,6 +3,10 @@
 -- external identity lets the parent choose the correct adapter at action time.
 class 'BridgeChild'(QuickAppChild)
 
+function BridgeChild:__init(device)
+  QuickAppChild.__init(self,device)
+end
+
 function BridgeChild:onInit() end
 
 local function dispatch(self, action, value)

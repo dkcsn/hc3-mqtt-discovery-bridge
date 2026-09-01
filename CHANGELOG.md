@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — 2026-09-01
+
+- Redesigned restart reconciliation around an explicit `QuickAppChild` class
+  lifecycle and schema-4 registry state, without development-time migrations.
+- Separated discovery requests from MQTT connection startup; HA Birth is now an
+  explicit operator action and cannot flood the state bootstrap path.
+- Added a dynamic 30-second probe for the entity selected in the existing UI;
+  no diagnostic topic is hardcoded.
+- Detects duplicate children with the same discovery identity and marks only
+  the duplicate as an orphan for guarded cleanup.
+- Replaced the permanent wall of QA buttons with lifecycle-aware primary and
+  secondary actions plus one maintenance selector; status now distinguishes
+  HC3 children from shared MQTT topic subscriptions.
+- Restricted device bulk creation to pending entities so a previous explicit
+  disable is never silently reversed.
+- Moved manual MQTT reconnect out of the HC3 action callback and added
+  connection generations so delayed events from the replaced client are ignored.
+
 ## 0.3.1 — 2026-08-31
 
 - Fixed a live HC3 crash by using the native MQTT client's `closed` event

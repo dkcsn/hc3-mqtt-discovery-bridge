@@ -7,7 +7,7 @@ function MQTTConnection.new(options)
   return setmetatable({config=options.config, logger=options.logger,
     onConnected=options.onConnected, onDisconnected=options.onDisconnected,
     onMessage=options.onMessage, client=nil, connected=false, stopping=false,
-    reconnectIndex=1, reconnectTimer=nil,
+    reconnectIndex=1, reconnectTimer=nil, generation=0,
     metrics={received=0,published=0,reconnects=0}}, MQTTConnection)
 end
 
@@ -23,6 +23,8 @@ function MQTTConnection:connect()
   end
   self.stopping=false
   if self.reconnectTimer then clearTimeout(self.reconnectTimer); self.reconnectTimer=nil end
+  self.generation=self.generation+1
+  local generation=self.generation
   if self.client then pcall(function() self.client:disconnect() end); self.client=nil end
   local options={clientId=self.config.clientId,username=self.config.username,
     password=self.config.password,cleanSession=true,keepAlivePeriod=60}
@@ -32,7 +34,11 @@ function MQTTConnection:connect()
   -- HC3's native MQTT client exposes `closed`; `disconnected` belongs to
   -- other socket APIs and crashes the QA on firmware that validates names.
   local function listen(name,handler)
-    local registered,registrationError=pcall(client.addEventListener,client,name,handler)
+    local function currentConnection(event)
+      if generation~=self.generation or client~=self.client then return end
+      return handler(event)
+    end
+    local registered,registrationError=pcall(client.addEventListener,client,name,currentConnection)
     if not registered then
       self.logger("ERROR","MQTT","could not register "..name.." event: "..tostring(registrationError))
       return false
@@ -94,10 +100,30 @@ end
 function MQTTConnection:disconnect()
   self.stopping=true; self.connected=false
   if self.reconnectTimer then clearTimeout(self.reconnectTimer); self.reconnectTimer=nil end
+  self.generation=self.generation+1
   if self.client then pcall(function() self.client:disconnect() end); self.client=nil end
 end
 
-function MQTTConnection:reconnect() self:disconnect(); self.stopping=false; return self:connect() end
+-- Native HC3 MQTT disconnect must not run inside the QuickApp onAction stack.
+-- A two-phase restart also invalidates late events from the old client before
+-- the replacement connection becomes current.
+function MQTTConnection:reconnect()
+  self.stopping=true; self.connected=false
+  if self.reconnectTimer then clearTimeout(self.reconnectTimer); self.reconnectTimer=nil end
+  self.generation=self.generation+1
+  local oldClient=self.client
+  self.client=nil
+  self.reconnectTimer=setTimeout(function()
+    self.reconnectTimer=nil
+    if oldClient then pcall(function() oldClient:disconnect() end) end
+    self.reconnectTimer=setTimeout(function()
+      self.reconnectTimer=nil
+      self.stopping=false
+      self:connect()
+    end,250)
+  end,0)
+  return true
+end
 
 function MQTTConnection:subscribe(topic,qos)
   if not self.connected or not self.client then return false,"not_connected" end

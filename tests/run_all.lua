@@ -9,6 +9,7 @@ dofile("SubscriptionRegistry.lua")
 dofile("EntityMapper.lua")
 dofile("EntityRegistry.lua")
 dofile("ApprovalManager.lua")
+dofile("ApprovalUI.lua")
 dofile("ChildFactory.lua")
 dofile("MQTTClient.lua")
 dofile("IconData.lua")
@@ -47,6 +48,12 @@ test("automatic mode activates pending but preserves disabled",function()
   equal(ApprovalManager.nextState(entity,{approvalState="pending"},"automatic"),ApprovalManager.ACTIVE)
   equal(ApprovalManager.nextState(entity,{approvalState="disabled"},"automatic"),ApprovalManager.DISABLED)
 end)
+test("restart preserves explicit pending and disabled state",function()
+  local entity={supported=true,childId=42,approvalState="pending"}
+  equal(ApprovalManager.restoreState(entity,"approval"),ApprovalManager.PENDING)
+  entity.approvalState="disabled"
+  equal(ApprovalManager.restoreState(entity,"approval"),ApprovalManager.DISABLED)
+end)
 
 test("approval device grouping and filters",function()
   local entities={
@@ -68,6 +75,47 @@ test("approval pages large result sets",function()
   local values={}; for index=1,95 do values[index]=index end
   local page,current,pages,total=ApprovalManager.page(values,3,40)
   equal(current,3); equal(pages,3); equal(total,95); equal(#page,15); equal(page[1],81)
+end)
+
+test("approval UI adapts actions to selected entity state",function()
+  local views={}
+  local entity={externalId="water",name="Water total",component="sensor",supported=true,
+    approvalState=ApprovalManager.PENDING,device={name="Multical",identifiers={"meter"}},
+    config={unit_of_measurement="m³"}}
+  local parent={config={approvalPageSize=40},childDevices={},
+    registry={entities={water=entity},get=function(_,id) return id=="water" and entity or nil end},
+    childFactory={orphanCount=function() return 0 end}}
+  function parent:updateView(name,property,value)
+    views[name]=views[name] or {}; views[name][property]=value
+  end
+  function parent:_log() end
+  function parent:setEntityApproval(_,state)
+    entity.approvalState=state
+    if state==ApprovalManager.ACTIVE then entity.childId=1398 end
+    return true,entity.childId
+  end
+  local ui=ApprovalUI.new(parent)
+  ui.scope="device:id:meter"; ui.externalId="water"; ui:refresh(true)
+  equal(views.btnEntityPrimary.text,"Create child")
+  equal(views.btnEntitySecondary.text,"Ignore entity")
+  equal(views.btnApproveDevice.text,"Create 1 pending child")
+  truthy(ui:primarySelected())
+  equal(views.btnEntityPrimary.text,"Disable child")
+  equal(views.btnEntitySecondary.text,"Entity details")
+  equal(views.btnApproveDevice.text,"No pending children")
+  truthy(views.approvalSelection.text:find("Child 1398",1,true))
+end)
+
+test("approval UI only offers orphan cleanup when needed",function()
+  local count=0
+  local parent={registry={entities={},get=function() end},config={approvalPageSize=40},
+    childFactory={orphanCount=function() return count end},updateView=function() end,_log=function() end}
+  local ui=ApprovalUI.new(parent)
+  local options=ui:_maintenanceOptions(0)
+  equal(options[#options].value,"summary")
+  options=ui:_maintenanceOptions(2)
+  equal(options[#options].value,"cleanup")
+  equal(options[#options].text,"Clean 2 orphan children")
 end)
 
 test("embedded HC3 icon is a 128 pixel PNG",function()
@@ -211,6 +259,32 @@ test("HC3 MQTT client uses closed event",function()
   equal(events.disconnected,nil,"HC3 MQTT does not support a disconnected event")
 end)
 
+test("manual MQTT reconnect is asynchronous and ignores stale client events",function()
+  local savedMqtt,savedSetTimeout,savedClearTimeout=mqtt,setTimeout,clearTimeout
+  local queue,disconnects,connections,oldClosed={},0,0,nil
+  setTimeout=function(callback,delay) queue[#queue+1]={callback=callback,delay=delay}; return #queue end
+  clearTimeout=function() end
+  local function client()
+    local value={}
+    function value:addEventListener(name,handler)
+      if connections==1 and name=="closed" then oldClosed=handler end
+    end
+    function value:disconnect() disconnects=disconnects+1 end
+    return value
+  end
+  mqtt={Client={connect=function() connections=connections+1; return client() end}}
+  local connection=MQTTConnection.new({config={brokerHost="broker",brokerPort=1883,tls=false,
+    clientId="test",username="",password=""},logger=function() end})
+  truthy(connection:connect())
+  truthy(connection:reconnect())
+  equal(disconnects,0,"native disconnect must not run in the action stack")
+  queue[1].callback(); equal(disconnects,1); equal(queue[2].delay,250)
+  if oldClosed then oldClosed({}) end
+  equal(#queue,2,"stale closed event must not schedule another reconnect")
+  queue[2].callback(); equal(connections,2)
+  mqtt,setTimeout,clearTimeout=savedMqtt,savedSetTimeout,savedClearTimeout
+end)
+
 test("switch mapping command",function()
   local entity={externalId="uid:s",component="switch",stateTopic="s/state",commandTopic="s/set",config={payload_on="YES",payload_off="NO"},qos=0,retain=false}
   assert(EntityMapper.prepare(entity,engine))
@@ -286,11 +360,22 @@ test("registry chunked storage roundtrip and compaction",function()
   equal(restored.config.unused_blob,nil); equal(restored.attributes,nil); equal(second:forChild(77).externalId,"uid:chunk")
 end)
 
-test("registry reload clears stale child index",function()
+test("registry rejects old schema and clears stale child index",function()
   local stored=assert(Utils.encodeJson({schema=2,entities={}}))
   local parent={getVariable=function() return stored end,setVariable=function() end}
   local registry=EntityRegistry.new({parent=parent}); registry.byChild[99]="stale"
-  truthy(registry:load()); equal(registry:forChild(99),nil); truthy(registry.dirty)
+  local ok,err=registry:load()
+  equal(ok,false); equal(err,"unsupported_registry_schema"); equal(registry:forChild(99),nil)
+end)
+
+test("child restore reads persisted variables without getVariable",function()
+  local child={properties={quickAppVariables={{name="mqttDiscoveryId",value="uid:restored"}}}}
+  local parent={childDevices={[42]=child},initChildDevices=function() end}
+  local entity={externalId="uid:restored"}
+  local registry={byChild={},get=function(_,externalId) return externalId=="uid:restored" and entity or nil end}
+  local factory=ChildFactory.new({parent=parent,registry=registry,logger=function() end})
+  factory:restore()
+  equal(entity.childId,42); equal(registry.byChild[42],"uid:restored"); equal(child.parent,parent)
 end)
 
 test("child deletion validates HTTP status",function()

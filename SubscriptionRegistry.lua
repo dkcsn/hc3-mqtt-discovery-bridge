@@ -50,7 +50,7 @@ end
 
 function SubscriptionRegistry:restoreSubscriptions()
   if not self.subscribe then return end
-  for topic, entry in pairs(self.entries) do self.subscribe(topic, entry.qos) end
+  for topic,entry in pairs(self.entries) do self.subscribe(topic,entry.qos) end
 end
 
 function SubscriptionRegistry:count()

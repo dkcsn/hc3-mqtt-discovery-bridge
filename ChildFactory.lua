@@ -21,18 +21,37 @@ local function childConstructors()
     "com.fibaro.multilevelSensor","com.fibaro.multilevelSwitch","com.fibaro.temperatureSensor",
     "com.fibaro.humiditySensor","com.fibaro.rollerShutter"}
   local map={}
-  for _,deviceType in ipairs(types) do map[deviceType]=function(device) return BridgeChild(device) end end
+  -- initChildDevices expects a QuickAppChild class, not a constructor
+  -- function. A wrapper works while there are no children, but HC3 calls a
+  -- class-only initializer as soon as it restores the first real child.
+  for _,deviceType in ipairs(types) do map[deviceType]=BridgeChild end
   return map
+end
+
+-- Child identity is stored in the standard quickAppVariables property array.
+-- Reading that persisted data directly keeps reconciliation deterministic.
+local function childVariable(child,name)
+  local variables=child.properties and child.properties.quickAppVariables or {}
+  for _,item in ipairs(variables) do
+    if item.name==name then return tostring(item.value or "") end
+  end
+  return ""
 end
 
 function ChildFactory:restore()
   self.orphans={}
   self.parent:initChildDevices(childConstructors())
   for id,child in pairs(self.parent.childDevices or {}) do
-    local externalId=child:getVariable("mqttDiscoveryId")
+    local externalId=childVariable(child,"mqttDiscoveryId")
     local entity=self.registry:get(externalId)
     if externalId~="" and entity then
-      entity.childId=id; self.registry.byChild[tonumber(id)]=externalId; child.parent=self.parent
+      local numericId=tonumber(id)
+      local existingId=tonumber(entity.childId)
+      if existingId and existingId~=numericId and self.parent.childDevices[existingId] then
+        self.orphans[numericId]=true
+      else
+        entity.childId=numericId; self.registry.byChild[numericId]=externalId; child.parent=self.parent
+      end
     else self.orphans[id]=true end
   end
 end

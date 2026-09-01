@@ -9,9 +9,9 @@
 | `Discovery.lua` | Atomic topic-level discovery update orchestration. |
 | `DiscoveryNormalize.lua` | Topic parsing, JSON validation, abbreviations, `~`, Device Discovery and canonical entities. |
 | `SubscriptionRegistry.lua` | Reference-counted exact-topic subscriptions and direct dispatch. |
-| `EntityRegistry.lua` | External-ID and child-ID indexes plus compact, chunked A/B persistence and migration. |
+| `EntityRegistry.lua` | External-ID and child-ID indexes plus compact, chunked A/B persistence. |
 | `ApprovalManager.lua` | Pure approval states, MQTT device grouping, counts and filter rules. |
-| `ApprovalUI.lua` | Dependent HC3 selects, approval actions, details and guarded cleanup. |
+| `ApprovalUI.lua` | Dependent HC3 selects, approval actions, dynamic entity probe, details and guarded cleanup. |
 | `EntityMapper.lua` | Component adapters, state conversion and command generation. |
 | `TemplateParser.lua` | Tokenizer, Pratt expression parser and control-block parser. |
 | `TemplateEvaluator.lua` | Safe AST evaluator, filters and tests. |
@@ -57,7 +57,9 @@ Preparation occurs before commit. A malformed sibling in Device Discovery is rej
 
 ## Identity and restart
 
-Identity priority is `unique_id`, device identifier plus component ID, then a deterministic discovery-topic hash. The child stores `mqttDiscoveryId`; the parent stores a compact canonical entity registry. Schema 3 writes verified internal-storage chunks before atomically switching an A/B generation manifest; schema 1/2 QuickApp-variable snapshots migrate automatically. Startup loads that registry, enumerates children, joins both indexes, recompiles templates and restores exact subscriptions before MQTT states are processed. Display names never participate in identity.
+Identity priority is `unique_id`, device identifier plus component ID, then a deterministic discovery-topic hash. The child stores `mqttDiscoveryId`; the parent stores a compact canonical entity registry. Schema 4 writes verified internal-storage chunks before atomically switching an A/B generation manifest. Development schemas are deliberately not migrated. Startup loads one exact schema, enumerates children, joins both indexes, recompiles templates and restores exact subscriptions before MQTT states are processed. Display names never participate in identity.
+
+Discovery and state lifecycles are separate. Connection startup subscribes to retained discovery and the exact topics of already-active entities. Publishing Home Assistant Birth is an explicit **Request Discovery** action, so a large discovery replay cannot be coupled implicitly to every reconnect.
 
 ## Shared-state efficiency
 
