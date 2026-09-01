@@ -6,7 +6,7 @@
 -- HC3 Devices UI. com.fibaro.device is only the abstract base type: HC3 will
 -- run a QA uploaded with it, but the resulting device has no GUI category.
 --%%type:com.fibaro.deviceController
---%%description:HC3 MQTT Discovery Bridge v0.3.2 — scalable discovery approval and native child devices
+--%%description:HC3 MQTT Discovery Bridge v0.3.3 — semantic discovery filtering and native child devices
 --%%desktop:true
 --%%file:./Constants.lua,Constants
 --%%file:./Utils.lua,Utils
@@ -44,6 +44,7 @@
 --%%u:{label="subscriptionStatus",text="0 children · 0 MQTT topics"}
 --%%u:{label="activityStatus",text="Last activity: never"}
 --%%u:{select="approvalDevice",text="Filter or MQTT device",value="",onToggled="approvalDeviceChanged",options={}}
+--%%u:{select="approvalGroup",text="Entity group",value="group:all",onToggled="approvalGroupChanged",options={}}
 --%%u:{select="approvalEntity",text="Entity",value="",onToggled="approvalEntityChanged",options={}}
 --%%u:{label="approvalPage",text="Page 1/1"}
 --%%u:{{button="btnApprovalPrev",text="Previous (start)",onReleased="approvalPreviousPage"},{button="btnApprovalNext",text="Next (end)",onReleased="approvalNextPage"}}
@@ -348,11 +349,12 @@ function QuickApp:setEntityApproval(externalId,state,deferRefresh)
   return false,"invalid_approval_state"
 end
 
-function QuickApp:approveDevice(deviceKey)
+function QuickApp:approveDevice(deviceKey,group)
   local matched,created,errors=0,0,{}
   for externalId,entity in pairs(self.registry.entities) do
     if ApprovalManager.deviceKey(entity)==deviceKey and entity.supported and
-       entity.approvalState==ApprovalManager.PENDING then
+       entity.approvalState==ApprovalManager.PENDING and
+       ApprovalManager.matchesEntityGroup(entity,group) then
       matched=matched+1
       local ok,err=self:setEntityApproval(externalId,ApprovalManager.ACTIVE,true)
       if ok then created=created+1 else errors[#errors+1]=externalId..": "..tostring(err) end
@@ -438,6 +440,7 @@ end
 -- HC3 UI callbacks are intentionally thin; ApprovalUI owns selection state
 -- while the methods above own all persistent and device-changing behavior.
 function QuickApp:approvalDeviceChanged(event) return self.approvalUI:deviceChanged(event) end
+function QuickApp:approvalGroupChanged(event) return self.approvalUI:groupChanged(event) end
 function QuickApp:approvalEntityChanged(event) return self.approvalUI:entityChanged(event) end
 function QuickApp:approveSelectedEntity() return self.approvalUI:approveSelected() end
 function QuickApp:approveSelectedDevice() return self.approvalUI:approveDevice() end

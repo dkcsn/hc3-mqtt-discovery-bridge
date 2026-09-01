@@ -77,6 +77,34 @@ test("approval pages large result sets",function()
   equal(current,3); equal(pages,3); equal(total,95); equal(#page,15); equal(page[1],81)
 end)
 
+test("semantic entity groups prefer HA metadata and retain unknown entities",function()
+  local entities={
+    {externalId="p",name="Active import",component="sensor",approvalState="pending",config={device_class="power",unit_of_measurement="W"}},
+    {externalId="e",name="Total import",component="sensor",approvalState="pending",config={device_class="energy",unit_of_measurement="kWh"}},
+    {externalId="u",name="L1 voltage",component="sensor",approvalState="pending",config={device_class="voltage",unit_of_measurement="V"}},
+    {externalId="pf",name="Power factor",component="sensor",approvalState="pending",config={device_class="power_factor",unit_of_measurement="%"}},
+    {externalId="cost",name="Current hour cost",component="sensor",approvalState="pending",config={device_class="monetary"}},
+    {externalId="ahead",name="Cheapest 6hr period ahead",component="sensor",approvalState="pending",config={}},
+    {externalId="temp",name="Temperature",component="sensor",approvalState="pending",config={device_class="temperature",unit_of_measurement="°C"}},
+    {externalId="switch",name="Relay",component="switch",approvalState="pending",config={}},
+    {externalId="stamp",name="Data timestamp",component="sensor",approvalState="pending",config={device_class="timestamp"}},
+    {externalId="unknown",name="Custom counter",component="sensor",approvalState="pending",config={}},
+  }
+  equal(ApprovalManager.entityGroupKey(entities[1]),"live_power")
+  equal(ApprovalManager.entityGroupKey(entities[2]),"energy_totals")
+  equal(ApprovalManager.entityGroupKey(entities[3]),"voltage_current")
+  equal(ApprovalManager.entityGroupKey(entities[4]),"power_quality")
+  equal(ApprovalManager.entityGroupKey(entities[5]),"prices_cost")
+  equal(ApprovalManager.entityGroupKey(entities[6]),"forecasts_peaks")
+  equal(ApprovalManager.entityGroupKey(entities[7]),"environment")
+  equal(ApprovalManager.entityGroupKey(entities[8]),"controls")
+  equal(ApprovalManager.entityGroupKey(entities[9]),"diagnostics")
+  equal(ApprovalManager.entityGroupKey(entities[10]),"other")
+  local groups=ApprovalManager.entityGroups(entities)
+  equal(groups[1].key,"all"); equal(groups[1].count,10); equal(groups[1].pending,10)
+  equal(#ApprovalManager.entitiesForGroup(entities,"group:voltage_current"),1)
+end)
+
 test("approval UI adapts actions to selected entity state",function()
   local views={}
   local entity={externalId="water",name="Water total",component="sensor",supported=true,
@@ -99,6 +127,9 @@ test("approval UI adapts actions to selected entity state",function()
   equal(views.btnEntityPrimary.text,"Create child")
   equal(views.btnEntitySecondary.text,"Ignore entity")
   equal(views.btnApproveDevice.text,"Create 1 pending child")
+  ui:groupChanged({values={"group:energy_totals"}})
+  equal(views.btnApproveDevice.text,"Create 1 pending in Energy totals")
+  equal(views.approvalGroup.selectedItem,"group:energy_totals")
   truthy(ui:primarySelected())
   equal(views.btnEntityPrimary.text,"Disable child")
   equal(views.btnEntitySecondary.text,"Entity details")

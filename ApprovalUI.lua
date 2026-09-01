@@ -1,5 +1,5 @@
--- HC3 presentation adapter for approval management. It renders two dependent
--- selects: a status/device scope followed by the entities inside that scope.
+-- HC3 presentation adapter for approval management. It renders three dependent
+-- selects: status/device scope, semantic entity group and the matching entities.
 ApprovalUI = {}
 ApprovalUI.__index = ApprovalUI
 
@@ -15,7 +15,7 @@ local function option(value,text) return {type="option",value=value,text=text} e
 
 function ApprovalUI.new(parent)
   return setmetatable({parent=parent,scope=nil,externalId=nil,page=1,revision=0,
-    lastSignature=nil,maintenance="none"},ApprovalUI)
+    group="group:all",lastSignature=nil,maintenance="none"},ApprovalUI)
 end
 
 function ApprovalUI:_view(name,property,value)
@@ -46,8 +46,21 @@ local function optionContains(options,value)
   return false
 end
 
-function ApprovalUI:_entities()
+function ApprovalUI:_scopeEntities()
   return ApprovalManager.entitiesForScope(self.parent.registry and self.parent.registry.entities or {},self.scope)
+end
+
+function ApprovalUI:_groupOptions(entities)
+  local options={}
+  for _,group in ipairs(ApprovalManager.entityGroups(entities)) do
+    local suffix=group.pending>0 and (" · "..group.pending.." pending") or ""
+    options[#options+1]=option("group:"..group.key,group.label.." ("..group.count..")"..suffix)
+  end
+  return options
+end
+
+function ApprovalUI:_entities(scopeEntities)
+  return ApprovalManager.entitiesForGroup(scopeEntities or self:_scopeEntities(),self.group)
 end
 
 function ApprovalUI:_entityOptions(entities)
@@ -120,9 +133,14 @@ function ApprovalUI:_bulkButtonText()
   local pending=0
   for _,entity in pairs(self.parent.registry and self.parent.registry.entities or {}) do
     if ApprovalManager.deviceKey(entity)==key and entity.supported and
-       entity.approvalState==ApprovalManager.PENDING then pending=pending+1 end
+       entity.approvalState==ApprovalManager.PENDING and
+       ApprovalManager.matchesEntityGroup(entity,self.group) then pending=pending+1 end
   end
   if pending==0 then return "No pending children" end
+  local groupKey=tostring(self.group or "group:all"):gsub("^group:","")
+  if groupKey~="all" then
+    return "Create "..pending.." pending in "..ApprovalManager.entityGroupLabel(groupKey)
+  end
   return "Create "..pending.." pending "..(pending==1 and "child" or "children")
 end
 
@@ -147,7 +165,10 @@ function ApprovalUI:refresh(force)
   if not optionContains(scopeOptions,self.scope) then
     self.scope=counts.pending>0 and "filter:pending" or "filter:all"
   end
-  local entities=self:_entities()
+  local scopeEntities=self:_scopeEntities()
+  local groupOptions=self:_groupOptions(scopeEntities)
+  if not optionContains(groupOptions,self.group) then self.group="group:all" end
+  local entities=self:_entities(scopeEntities)
   local pageSize=self.parent.config and self.parent.config.approvalPageSize or Constants.APPROVAL_PAGE_SIZE
   local pageEntities,page,pages,total=ApprovalManager.page(entities,self.page,pageSize)
   self.page=page
@@ -155,18 +176,21 @@ function ApprovalUI:refresh(force)
   if not optionContains(entityOptions,self.externalId) then
     self.externalId=entityOptions[1] and entityOptions[1].value or nil
   end
-  local signatureParts={self.scope,tostring(self.externalId),tostring(page)..":"..tostring(pages),
+  local signatureParts={self.scope,self.group,tostring(self.externalId),tostring(page)..":"..tostring(pages),
     tostring(counts.all)..":"..tostring(counts.active)..":"..tostring(counts.pending)..":"..
     tostring(counts.disabled)..":"..tostring(counts.unsupported)}
   for _,item in ipairs(scopeOptions) do signatureParts[#signatureParts+1]=item.value.."="..item.text end
+  for _,item in ipairs(groupOptions) do signatureParts[#signatureParts+1]=item.value.."="..item.text end
   for _,item in ipairs(entityOptions) do signatureParts[#signatureParts+1]=item.value.."="..item.text end
   local signature=table.concat(signatureParts,"|")
   if force or signature~=self.lastSignature then
     self.lastSignature=signature
     self:_view("approvalDevice","options",scopeOptions)
+    self:_view("approvalGroup","options",groupOptions)
     self:_view("approvalEntity","options",entityOptions)
   end
   self:_view("approvalDevice","selectedItem",self.scope)
+  self:_view("approvalGroup","selectedItem",self.group)
   self:_view("approvalEntity","selectedItem",self.externalId or "")
   local first=total==0 and 0 or ((page-1)*pageSize+1)
   local last=math.min(total,page*pageSize)
@@ -191,6 +215,7 @@ function ApprovalUI:refresh(force)
   if setTimeout then setTimeout(function()
     if revision==self.revision then
       self:_view("approvalDevice","selectedItem",self.scope)
+      self:_view("approvalGroup","selectedItem",self.group)
       self:_view("approvalEntity","selectedItem",self.externalId or "")
       self:_view("maintenanceAction","selectedItem",self.maintenance)
     end
@@ -200,7 +225,14 @@ end
 function ApprovalUI:deviceChanged(event)
   local value=tostring(firstEventValue(event) or "")
   if value=="" then return end
-  self.scope=value; self.externalId=nil; self.page=1; self.deleteCandidate=nil; self:refresh(true)
+  self.scope=value; self.group="group:all"; self.externalId=nil; self.page=1
+  self.deleteCandidate=nil; self:refresh(true)
+end
+
+function ApprovalUI:groupChanged(event)
+  local value=tostring(firstEventValue(event) or "")
+  if value=="" then return end
+  self.group=value; self.externalId=nil; self.page=1; self.deleteCandidate=nil; self:refresh(true)
 end
 
 function ApprovalUI:previousPage()
@@ -269,7 +301,7 @@ function ApprovalUI:approveDevice()
     self:_view("approvalSelection","text","Choose a physical device before bulk creation")
     return false,"device_not_selected"
   end
-  local ok,result=self.parent:approveDevice(key)
+  local ok,result=self.parent:approveDevice(key,self.group)
   self:refresh(true)
   return ok,result
 end

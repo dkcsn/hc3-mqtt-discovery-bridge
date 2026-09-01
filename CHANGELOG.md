@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3 — 2026-09-01
+
+- Added a third, semantic entity-group filter between device/status scope and
+  entity selection for large MQTT Discovery datasets.
+- Classifies entities deterministically from Home Assistant `device_class`,
+  component and unit metadata, with name matching only as a fallback and an
+  explicit `Other` group that prevents unknown entities from disappearing.
+- Added per-group entity and pending counts, page reset on group changes and
+  group-scoped bulk creation that continues to preserve disabled entities.
+
 ## 0.3.2 — 2026-09-01
 
 - Redesigned restart reconciliation around an explicit `QuickAppChild` class

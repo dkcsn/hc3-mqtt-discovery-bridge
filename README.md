@@ -1,6 +1,6 @@
 # HC3 MQTT Discovery Bridge
 
-Current release: **0.3.2**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
+Current release: **0.3.3**. The canonical release number is stored in [`VERSION`](VERSION), mirrored by `Constants.VERSION`, checked by the test suite and exposed as HC3 device metadata at runtime.
 
 > **License:** Noncommercial use only under [PolyForm Noncommercial 1.0.0](LICENSE.md). Commercial use requires a separate written license from the licensor.
 
@@ -23,7 +23,7 @@ HC3 MQTT Discovery Bridge
 
 ## Current scope
 
-Version 0.3.2 implements a production-oriented bridge with scalable approval and durable storage:
+Version 0.3.3 implements a production-oriented bridge with scalable approval and durable storage:
 
 - MQTT connect, reconnect with bounded exponential backoff and jitter, disconnect, subscribe, unsubscribe and publish;
 - component discovery and Device Discovery, both legal discovery topic shapes;
@@ -33,7 +33,7 @@ Version 0.3.2 implements a production-oriented bridge with scalable approval and
 - safe parsed templates: expressions, JSON paths, filters, operators, tests, inline conditionals and `if/elif/else` blocks;
 - HC3 children for `sensor`, `binary_sensor`, `switch`, `light`, `cover`, `button`, `number`, `select`, `device_tracker`, `siren` and `fan`;
 - adaptive parent UI, scene-callable API, metrics and log suppression for repeated template errors;
-- optional approval mode with device/entity filters, pagination, bulk approval, reversible disable and guarded child/orphan cleanup;
+- optional approval mode with status/device, semantic group and entity filters, pagination, scoped bulk approval, reversible disable and guarded child/orphan cleanup;
 - automatic upload and stable reuse of the bundled 128 × 128 parent icon.
 
 An external MQTT broker such as Mosquitto, EMQX or HiveMQ is required. The QuickApp is an MQTT client, not a broker.
@@ -69,7 +69,7 @@ list it as a normal device in the web GUI.
 | `discoveryMode` | `automatic` | `automatic` creates supported children immediately; `approval` keeps new entities pending. |
 | `approvalPageSize` | `40` | Entities per second-level dropdown page; clamped to 10–100. |
 
-Version 0.3.2 stores a compact schema-4 registry in hidden HC3 internal-storage chunks with an integrity manifest and alternating generations. Development schemas are intentionally not migrated: install/reset a clean registry after a schema change. Do not edit storage manually.
+Version 0.3.3 stores a compact schema-4 registry in hidden HC3 internal-storage chunks with an integrity manifest and alternating generations. Development schemas are intentionally not migrated: install/reset a clean registry after a schema change. Do not edit storage manually.
 
 ## First connection
 
@@ -78,12 +78,14 @@ Version 0.3.2 stores a compact schema-4 registry in hidden HC3 internal-storage 
 3. Enable TLS only when the broker listener supports it.
 4. Restart the QuickApp.
 5. Wait for retained discovery configurations.
-6. In approval mode, choose an MQTT device and entity, then press **Create child** or the device-specific **Create N pending children** button.
+6. In approval mode, choose an MQTT device or status, a semantic entity group and then an entity. Press **Create child** or the group-specific **Create N pending in Group** button.
 7. Choose **Request MQTT discovery** under **Maintenance** only when publishers need an explicit HA Birth request.
 8. Choose **Probe selected entity (30 sec)** under **Maintenance** for a dynamically scoped topic diagnostic.
 9. Verify that children appear and update.
 
 The two entity buttons adapt to the selected lifecycle state: pending entities offer **Create child** and **Ignore entity**, active entities offer **Disable child** and **Entity details**, and disabled entities can be reactivated or—when a child exists—deleted. Deactivation keeps the HC3 child but stops MQTT updates. **Delete child** requires two clicks within ten seconds, removes the child and keeps the discovery record disabled so retained MQTT discovery cannot recreate it immediately. Orphan cleanup is only offered in **Maintenance** when orphans exist and also requires confirmation. Device bulk creation activates pending entities only; it never reverses an explicit disable.
+
+The entity-group dropdown is generated from Home Assistant metadata rather than producer-specific rules. It provides **Live power**, **Energy totals**, **Voltage & current**, **Power quality**, **Prices & cost**, **Forecasts & peaks**, **Environment**, **Controls**, **Diagnostics** and **Other**. Missing or unfamiliar metadata always falls back to **Other**, so filtering cannot hide an entity permanently.
 
 The compact status deliberately reports **children** and **MQTT topics** separately. One child can consume a state topic plus one or more availability topics, while several children can share one broker subscription.
 

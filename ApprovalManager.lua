@@ -14,6 +14,123 @@ local validState = {
 
 local function lower(value) return tostring(value or ""):lower() end
 
+-- Stable semantic groups keep large discovery devices navigable without
+-- coupling the UI to one producer's entity names. Home Assistant metadata is
+-- authoritative; textual matching is only a fallback for incomplete configs.
+local entityGroupDefinitions = {
+  {key="live_power",label="Live power"},
+  {key="energy_totals",label="Energy totals"},
+  {key="voltage_current",label="Voltage & current"},
+  {key="power_quality",label="Power quality"},
+  {key="prices_cost",label="Prices & cost"},
+  {key="forecasts_peaks",label="Forecasts & peaks"},
+  {key="environment",label="Environment"},
+  {key="controls",label="Controls"},
+  {key="diagnostics",label="Diagnostics"},
+  {key="other",label="Other"},
+}
+
+local groupLabels={all="All entities"}
+local groupOrder={}
+for index,definition in ipairs(entityGroupDefinitions) do
+  groupLabels[definition.key]=definition.label
+  groupOrder[definition.key]=index
+end
+
+local function oneOf(value,values)
+  for _,candidate in ipairs(values) do if value==candidate then return true end end
+  return false
+end
+
+local function containsAny(value,needles)
+  for _,needle in ipairs(needles) do if value:find(needle,1,true) then return true end end
+  return false
+end
+
+function ApprovalManager.entityGroupKey(entity)
+  local config=entity.config or {}
+  local component=lower(entity.component)
+  local deviceClass=lower(config.device_class or entity.deviceClass)
+  local unit=lower(config.unit_of_measurement):gsub("%s+","")
+  local category=lower(config.entity_category)
+  local name=lower((entity.name or "").." "..(entity.objectId or "").." "..(entity.externalId or ""))
+
+  if oneOf(component,{"switch","light","cover","button","number","select","siren","fan","lock","climate"}) then
+    return "controls"
+  end
+  if category=="diagnostic" or oneOf(deviceClass,{"battery","connectivity","duration","enum",
+      "signal_strength","timestamp","data_rate","data_size"}) then return "diagnostics" end
+  if oneOf(deviceClass,{"monetary"}) then return "prices_cost" end
+  if oneOf(deviceClass,{"power","apparent_power","reactive_power"}) then return "live_power" end
+  if oneOf(deviceClass,{"energy","energy_storage","gas","water"}) then return "energy_totals" end
+  if oneOf(deviceClass,{"current","voltage"}) then return "voltage_current" end
+  if oneOf(deviceClass,{"frequency","power_factor"}) then return "power_quality" end
+  if oneOf(deviceClass,{"temperature","humidity","pressure","atmospheric_pressure","illuminance",
+      "carbon_dioxide","carbon_monoxide","volatile_organic_compounds","volatile_organic_compounds_parts",
+      "pm1","pm10","pm25","nitrogen_dioxide","nitrogen_monoxide","nitrous_oxide","ozone",
+      "sulphur_dioxide","wind_speed","precipitation","precipitation_intensity","moisture"}) then
+    return "environment"
+  end
+
+  -- Units are more reliable than translated display names when device_class
+  -- is omitted. Test energy before power because kWh also contains a W.
+  if containsAny(unit,{"kwh","mwh","wh","m³","m3","ft³","ft3"}) then return "energy_totals" end
+  if oneOf(unit,{"w","kw","mw","va","kva","var","kvar"}) then return "live_power" end
+  if oneOf(unit,{"v","mv","a","ma"}) then return "voltage_current" end
+  if oneOf(unit,{"hz","%"}) and containsAny(name,{"frequency","power factor","pf"}) then return "power_quality" end
+  if containsAny(unit,{"°c","°f","ppm","µg/m³","ug/m3","lx","hpa"}) then return "environment" end
+
+  if containsAny(name,{"forecast","cheapest","expensive","period ahead"," peak"}) then return "forecasts_peaks" end
+  if containsAny(name,{"price","cost","tariff","currency"}) then return "prices_cost" end
+  if containsAny(name,{"voltage"," current","current l","ampere"}) then return "voltage_current" end
+  if containsAny(name,{"power factor","frequency","reactive","apparent"}) then return "power_quality" end
+  if containsAny(name,{"power","active import","active export","watt"}) then return "live_power" end
+  if containsAny(name,{"energy","accumulated","meter reading","used","usage","consumption"}) then return "energy_totals" end
+  if containsAny(name,{"temperature","humidity","pressure","co2","illuminance","air quality"}) then return "environment" end
+  if containsAny(name,{"uptime","timestamp","last seen","age","rssi","signal","firmware","online","status"}) then
+    return "diagnostics"
+  end
+  return "other"
+end
+
+function ApprovalManager.entityGroupLabel(key)
+  key=tostring(key or "all"):gsub("^group:","")
+  return groupLabels[key] or groupLabels.other
+end
+
+function ApprovalManager.matchesEntityGroup(entity,group)
+  local key=tostring(group or "group:all"):gsub("^group:","")
+  return key=="all" or ApprovalManager.entityGroupKey(entity)==key
+end
+
+function ApprovalManager.entityGroups(entities)
+  local grouped={}
+  local total,pending=0,0
+  for _,entity in ipairs(entities or {}) do
+    local key=ApprovalManager.entityGroupKey(entity)
+    local group=grouped[key]
+    if not group then group={key=key,label=ApprovalManager.entityGroupLabel(key),count=0,pending=0}; grouped[key]=group end
+    group.count=group.count+1; total=total+1
+    if entity.approvalState==ApprovalManager.PENDING then group.pending=group.pending+1; pending=pending+1 end
+  end
+  local result={{key="all",label=groupLabels.all,count=total,pending=pending}}
+  for _,group in pairs(grouped) do result[#result+1]=group end
+  table.sort(result,function(a,b)
+    if a.key=="all" then return true end
+    if b.key=="all" then return false end
+    return (groupOrder[a.key] or 999)<(groupOrder[b.key] or 999)
+  end)
+  return result
+end
+
+function ApprovalManager.entitiesForGroup(entities,group)
+  local result={}
+  for _,entity in ipairs(entities or {}) do
+    if ApprovalManager.matchesEntityGroup(entity,group) then result[#result+1]=entity end
+  end
+  return result
+end
+
 function ApprovalManager.normalizeMode(value)
   value=lower(value)
   if value=="approval" then return "approval" end

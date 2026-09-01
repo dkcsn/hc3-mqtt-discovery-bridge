@@ -69,6 +69,8 @@ The subscription registry owns one broker subscription per exact topic and fans 
 
 HC3 does not expose Home Assistant's device/entity hierarchy. Physical-device identifiers and metadata are preserved, but components are sibling HC3 children with consistent names. `select` and `button` use generic children because HC3 has no equivalent native child type with the same UI semantics.
 
+The approval UI derives a transient semantic group from each entity's Home Assistant `device_class`, component and unit. This grouping is presentation state only and is never persisted into the discovery registry. Device/status, semantic group and entity therefore form three dependent selectors without changing MQTT identity or lifecycle semantics. Unknown metadata is routed to `Other`.
+
 ## Security boundaries
 
 Discovery and state payloads are untrusted. The bridge bounds discovery and template sizes, validates topics/numbers, uses `pcall` at entity and MQTT event boundaries, and never translates templates into Lua. The evaluator sees only its explicit context and registered filters/tests; it cannot access files, network, HC3 APIs or Lua globals.

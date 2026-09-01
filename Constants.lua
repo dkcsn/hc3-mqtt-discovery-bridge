@@ -2,7 +2,7 @@
 -- makes compatibility changes reviewable without touching runtime logic.
 Constants = {
   NAME = "HC3 MQTT Discovery Bridge",
-  VERSION = "0.3.2",
+  VERSION = "0.3.3",
   UUID = "9b829884-f9d1-4b45-81cb-6c3d6ca9632a",
   REGISTRY_SCHEMA = 4,
   REGISTRY_VARIABLE = "mqttEntityRegistry",
